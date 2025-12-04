@@ -1,0 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-gradient-to-b from-[#f5f0fa] to-[#e8f9f6] text-gray-900 antialiased;
+}
