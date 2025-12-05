@@ -1,4 +1,9 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+} from "react";
 import { motion } from "framer-motion";
 import france from "@svg-maps/france.regions";
 import {
@@ -8,8 +13,10 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { supabase } from "./supabaseClient"; // ou `import supabase from "./supabaseClient";` si export default
 
 const STORAGE_KEY = "partner-map-france:v1";
+const ADMIN_PASSWORD = "admin1234"; // 🔐 Mot de passe admin
 
 // Palette Ubika
 const UBIKA_PURPLE = "#7b2cbf"; // sélection
@@ -83,6 +90,43 @@ const SAMPLE_DATA = {
     ],
   })),
 };
+
+// Normalisation des données (on s'aligne toujours sur la carte SVG)
+function normalizeData(raw) {
+  const existingRegions = Array.isArray(raw?.regions) ? raw.regions : [];
+
+  const normalizedRegions = france.locations.map((loc) => {
+    const match =
+      existingRegions.find((r) => r.id === loc.id) ||
+      existingRegions.find(
+        (r) => (r.name || "").trim() === (loc.name || "").trim()
+      );
+
+    const base = match || {
+      id: loc.id,
+      name: loc.name,
+      partners: [],
+    };
+
+    return {
+      id: base.id || loc.id,
+      name: base.name || loc.name,
+      partners: (base.partners || []).map((p) => ({
+        ...p,
+        contacts: (p.contacts || []).map((c) => ({
+          ...c,
+          verticals: c.verticals || [],
+          namedAccounts: c.namedAccounts || [],
+          territory: c.territory || "",
+        })),
+        projects: p.projects || [],
+      })),
+    };
+  });
+
+  console.log("[NORMALIZE] données normalisées :", normalizedRegions);
+  return { regions: normalizedRegions };
+}
 
 function FranceSvg({ onSelect, hoveredId, setHoveredId, selectedId }) {
   const vb = france.viewBox || "0 0 1096 915";
@@ -301,7 +345,7 @@ function AddContactInline({ onAdd }) {
 function AddContactDialog({ onAdd }) {
   const [open, setOpen] = useState(false);
 
-  const normalizeList = (s) =>
+  const normalizeListLocal = (s) =>
     (s || "")
       .split(/[;,]/)
       .map((v) => v.trim())
@@ -327,8 +371,8 @@ function AddContactDialog({ onAdd }) {
               title: c.title,
               email: c.email,
               phone: c.phone,
-              verticals: normalizeList(c.verticals),
-              namedAccounts: normalizeList(c.namedAccounts),
+              verticals: normalizeListLocal(c.verticals),
+              namedAccounts: normalizeListLocal(c.namedAccounts),
               territory: (c.territory || "").trim(),
             };
             onAdd(payload);
@@ -621,7 +665,7 @@ function ImportCsvDialog({ onImport }) {
 region,partner,city,address,status,firstName,lastName,title,email,phone,account
           </pre>
           <p className="text-xs text-gray-500">
-            Tu peux aussi utiliser <code>accounts</code>,
+            Tu peux aussi utiliser <code>accounts</code>,{" "}
             <code>namedAccounts</code> avec plusieurs comptes séparés par
             virgules ou point-virgule.
           </p>
@@ -838,12 +882,6 @@ function EditContactDialog({ contact, onSave }) {
     setForm((f) => ({ ...f, photo: dataUrl }));
   };
 
-  const normalizeList = (s) =>
-    (s || "")
-      .split(/[;,]/)
-      .map((v) => v.trim())
-      .filter(Boolean);
-
   const canSave =
     form.firstName.trim().length > 0 ||
     form.lastName.trim().length > 0 ||
@@ -1005,6 +1043,14 @@ function EditContactDialog({ contact, onSave }) {
   );
 }
 
+// helper global
+function normalizeList(str) {
+  return (str || "")
+    .split(/[;,]/)
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
 // Édition projet
 function EditProjectDialog({ project, onSave }) {
   const [open, setOpen] = useState(false);
@@ -1113,55 +1159,127 @@ function EditProjectDialog({ project, onSave }) {
 }
 
 export default function PartnerMapFrance() {
-  const [data, setData] = useState(() => {
-    try {
-      if (typeof window !== "undefined") {
-        const raw = window.localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          return {
-            regions: (parsed.regions || []).map((r) => ({
-              ...r,
-              partners: (r.partners || []).map((p) => ({
-                ...p,
-                contacts: (p.contacts || []).map((c) => ({
-                  ...c,
-                  verticals: c.verticals || [],
-                  namedAccounts: c.namedAccounts || [],
-                  territory: c.territory || "",
-                })),
-                projects: p.projects || [],
-              })),
-            })),
-          };
-        }
-      }
-    } catch {}
-    return SAMPLE_DATA;
-  });
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
 
   const [selectedRegionId, setSelectedRegionId] = useState(null);
   const [hoveredId, setHoveredId] = useState(null);
   const [activePartnerIndex, setActivePartnerIndex] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [adminDialogOpen, setAdminDialogOpen] = useState(false);
-  const [adminPassword, setAdminPassword] = useState("");
-  const [adminError, setAdminError] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
   const [accountSearch, setAccountSearch] = useState("");
 
-  // persistance
+  // Chargement initial depuis Supabase (avec fallback localStorage/SAMPLE_DATA)
   useEffect(() => {
-    try {
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    async function load() {
+      console.log("[LOAD] Début du chargement…");
+      try {
+        const { data: row, error } = await supabase
+          .from("partner_map")
+          .select("data")
+          .eq("id", "france")
+          .single();
+
+        console.log("[LOAD] Résultat Supabase:", { row, error });
+
+        if (error) {
+          console.error("[LOAD] Erreur Supabase:", error);
+          setLoadError("Erreur de chargement Supabase");
+
+          // Fallback localStorage
+          try {
+            if (typeof window !== "undefined") {
+              const raw = window.localStorage.getItem(STORAGE_KEY);
+              if (raw) {
+                console.log("[LOAD] Chargement depuis localStorage");
+                const parsed = JSON.parse(raw);
+                setData(normalizeData(parsed));
+                setLoading(false);
+                return;
+              }
+            }
+          } catch (e) {
+            console.error("[LOAD] Erreur localStorage:", e);
+          }
+
+          console.log("[LOAD] Fallback SAMPLE_DATA");
+          setData(normalizeData(SAMPLE_DATA));
+          setLoading(false);
+          return;
+        }
+
+        if (row?.data) {
+          console.log("[LOAD] Données Supabase trouvées, normalisation…");
+          setData(normalizeData(row.data));
+        } else {
+          console.log("[LOAD] Aucune ligne Supabase, utilisation SAMPLE_DATA");
+          setData(normalizeData(SAMPLE_DATA));
+        }
+      } catch (e) {
+        console.error("[LOAD] Exception Supabase:", e);
+        setLoadError("Erreur de chargement");
+        setData(normalizeData(SAMPLE_DATA));
+      } finally {
+        setLoading(false);
       }
-    } catch {}
+    }
+
+    load();
+  }, []);
+
+  // Sauvegarde vers Supabase + backup localStorage
+  useEffect(() => {
+    if (!data) return;
+
+    console.log("[SAVE] data modifiée, lancement de la sauvegarde…", data);
+
+    async function save() {
+      try {
+        const { error } = await supabase
+          .from("partner_map")
+          .upsert(
+            { id: "france", data },
+            { onConflict: "id" }
+          );
+
+        if (error) {
+          console.error("[SAVE] Erreur Supabase save:", error);
+        } else {
+          console.log("[SAVE] Supabase OK");
+        }
+      } catch (e) {
+        console.error("[SAVE] Exception Supabase save:", e);
+      }
+
+      try {
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+          console.log("[SAVE] localStorage OK");
+        }
+      } catch (e) {
+        console.error("[SAVE] Erreur localStorage:", e);
+      }
+    }
+
+    save();
   }, [data]);
 
-  const selectedRegion = selectedRegionId
-    ? data.regions.find((r) => r.id === selectedRegionId)
-    : null;
+  // selectedRegion robuste : par id puis par nom si besoin
+  const selectedRegion = useMemo(() => {
+    if (!data || !selectedRegionId) return null;
+
+    const byId = data.regions.find((r) => r.id === selectedRegionId);
+    if (byId) return byId;
+
+    const loc = france.locations.find((l) => l.id === selectedRegionId);
+    if (!loc) return null;
+
+    const byName = data.regions.find(
+      (r) => (r.name || "").trim() === (loc.name || "").trim()
+    );
+    return byName || null;
+  }, [data, selectedRegionId]);
 
   const activePartner =
     selectedRegion && activePartnerIndex !== null
@@ -1172,19 +1290,20 @@ export default function PartnerMapFrance() {
     if (isAdmin) {
       setIsAdmin(false);
     } else {
-      setAdminPassword("");
-      setAdminError("");
-      setAdminDialogOpen(true);
+      const pwd = window.prompt("Mot de passe admin ?");
+      if (pwd === null) return;
+      if (pwd === ADMIN_PASSWORD) {
+        setIsAdmin(true);
+      } else {
+        window.alert("Mot de passe incorrect");
+      }
     }
   };
 
   const handleDeletePartner = (partnerIndex) => {
-    if (!selectedRegionId) return;
+    if (!selectedRegion || !data) return;
 
-    const region = data.regions.find((r) => r.id === selectedRegionId);
-    if (!region) return;
-
-    const partner = region.partners[partnerIndex];
+    const partner = selectedRegion.partners[partnerIndex];
     if (!partner) return;
 
     const ok = window.confirm(
@@ -1194,7 +1313,7 @@ export default function PartnerMapFrance() {
 
     setData((prev) => ({
       regions: prev.regions.map((r) => {
-        if (r.id !== region.id) return r;
+        if (r.id !== selectedRegion.id) return r;
         const newPartners = r.partners.filter((_, i) => i !== partnerIndex);
         return { ...r, partners: newPartners };
       }),
@@ -1209,7 +1328,7 @@ export default function PartnerMapFrance() {
   };
 
   const handleDeleteContact = (contactIndex) => {
-    if (!activePartner || !selectedRegion) return;
+    if (!activePartner || !selectedRegion || !data) return;
 
     const contact = activePartner.contacts?.[contactIndex];
     if (!contact) return;
@@ -1237,7 +1356,7 @@ export default function PartnerMapFrance() {
   };
 
   const handleDeleteProject = (projectIndex) => {
-    if (!activePartner || !selectedRegion) return;
+    if (!activePartner || !selectedRegion || !data) return;
 
     const project = activePartner.projects?.[projectIndex];
     if (!project) return;
@@ -1267,7 +1386,7 @@ export default function PartnerMapFrance() {
   // Recherche globale de projets
   const filteredProjects = useMemo(() => {
     const q = projectSearch.trim().toLowerCase();
-    if (!q) return [];
+    if (!q || !data) return [];
     const results = [];
 
     data.regions.forEach((region) => {
@@ -1291,7 +1410,7 @@ export default function PartnerMapFrance() {
   // Recherche globale par compte nommé (utilise namedAccounts des contacts)
   const filteredAccounts = useMemo(() => {
     const q = accountSearch.trim().toLowerCase();
-    if (!q) return [];
+    if (!q || !data) return [];
     const results = [];
 
     data.regions.forEach((region) => {
@@ -1317,6 +1436,7 @@ export default function PartnerMapFrance() {
 
   // Import CSV avec prise en compte des comptes nommés
   const handleImportCsv = (rows) => {
+    if (!data) return;
     setData((prev) => {
       const nextRegions = prev.regions.map((r) => {
         const rowsForRegion = rows.filter((row) => {
@@ -1332,7 +1452,6 @@ export default function PartnerMapFrance() {
             row.partner || row.PARTNER || row.Partner || "";
           if (!partnerName) return;
 
-          // Trouver ou créer le partenaire
           let idx = partners.findIndex(
             (p) => (p.name || "").trim() === partnerName.trim()
           );
@@ -1368,7 +1487,6 @@ export default function PartnerMapFrance() {
             phone: row.phone || row.Phone || "",
           };
 
-          // Récupération des comptes nommés depuis le CSV
           const accountsRaw =
             row.account ||
             row.Account ||
@@ -1382,7 +1500,6 @@ export default function PartnerMapFrance() {
             .map((v) => v.trim())
             .filter(Boolean);
 
-          // Si on n'a ni info contact ni comptes => on ignore
           if (
             !baseContact.firstName &&
             !baseContact.lastName &&
@@ -1393,7 +1510,6 @@ export default function PartnerMapFrance() {
             return;
           }
 
-          // Chercher un contact existant (email prioritaire, sinon prénom+nom)
           let matchIndex = contacts.findIndex((c) => {
             if (baseContact.email && c.email) {
               return (
@@ -1418,7 +1534,6 @@ export default function PartnerMapFrance() {
           });
 
           if (matchIndex === -1) {
-            // Nouveau contact
             contacts = [
               ...contacts,
               {
@@ -1429,10 +1544,8 @@ export default function PartnerMapFrance() {
               },
             ];
           } else {
-            // Fusion avec un contact existant
             const existing = contacts[matchIndex];
 
-            // Merge des champs texte (si présents dans la ligne)
             const updated = { ...existing };
             ["firstName", "lastName", "title", "email", "phone"].forEach(
               (field) => {
@@ -1442,7 +1555,6 @@ export default function PartnerMapFrance() {
               }
             );
 
-            // Merge des comptes nommés
             const mergedAccounts = [
               ...(existing.namedAccounts || []),
               ...accountsList,
@@ -1450,14 +1562,12 @@ export default function PartnerMapFrance() {
               .map((a) => a.trim())
               .filter(Boolean);
 
-            const uniqueLower = [...new Set(
-              mergedAccounts.map((a) => a.toLowerCase())
-            )];
+            const uniqueLower = [
+              ...new Set(mergedAccounts.map((a) => a.toLowerCase())),
+            ];
 
             const uniqueAccounts = uniqueLower.map((lower) =>
-              mergedAccounts.find(
-                (a) => a.toLowerCase() === lower
-              )
+              mergedAccounts.find((a) => a.toLowerCase() === lower)
             );
 
             updated.namedAccounts = uniqueAccounts;
@@ -1480,6 +1590,16 @@ export default function PartnerMapFrance() {
     });
   };
 
+  if (loading || !data) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-[#f5f0fa] to-[#e8f9f6]">
+        <div className="rounded-2xl border bg-white shadow-md px-6 py-4 text-sm text-gray-700">
+          Chargement des données partenaires…
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="relative min-h-screen bg-gradient-to-b from-[#f5f0fa] to-[#e8f9f6] p-6">
       <div className="mx-auto max-w-6xl space-y-4">
@@ -1491,7 +1611,6 @@ export default function PartnerMapFrance() {
 
           <div className="flex flex-col sm:flex-row sm:items-center gap-2">
             <div className="flex flex-col sm:flex-row gap-2">
-              {/* Champ de recherche projet */}
               <input
                 type="text"
                 value={projectSearch}
@@ -1500,7 +1619,6 @@ export default function PartnerMapFrance() {
                 className="rounded-full border px-3 py-1.5 text-xs text-gray-900 bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
                 style={{ minWidth: "200px" }}
               />
-              {/* Champ de recherche comptes nommés */}
               <input
                 type="text"
                 value={accountSearch}
@@ -1528,62 +1646,11 @@ export default function PartnerMapFrance() {
           </div>
         </div>
 
-        {/* Dialog admin */}
-        <Dialog
-          open={adminDialogOpen}
-          onOpenChange={(open) => {
-            setAdminDialogOpen(open);
-            if (!open) {
-              setAdminPassword("");
-              setAdminError("");
-            }
-          }}
-        >
-          <DialogContent className="max-w-xs">
-            <DialogHeader>
-              <DialogTitle>Passer en mode admin</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-3">
-              <input
-                type="password"
-                className="border rounded px-2 py-1 w-full text-gray-900"
-                placeholder="Mot de passe admin"
-                value={adminPassword}
-                onChange={(e) => setAdminPassword(e.target.value)}
-              />
-              {adminError && (
-                <p className="text-xs text-red-600">{adminError}</p>
-              )}
-              <div className="flex justify-end gap-2">
-                <button
-                  className="text-xs px-3 py-1.5 rounded border"
-                  onClick={() => {
-                    setAdminDialogOpen(false);
-                    setAdminPassword("");
-                    setAdminError("");
-                  }}
-                >
-                  Annuler
-                </button>
-                <button
-                  className="text-xs px-3 py-1.5 rounded bg-purple-600 text-white hover:bg-purple-700"
-                  onClick={() => {
-                    if (adminPassword === "admin1234") {
-                      setIsAdmin(true);
-                      setAdminDialogOpen(false);
-                      setAdminPassword("");
-                      setAdminError("");
-                    } else {
-                      setAdminError("Mot de passe incorrect");
-                    }
-                  }}
-                >
-                  Valider
-                </button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+        {loadError && (
+          <div className="text-xs text-red-600">
+            {loadError} (données locales utilisées en secours)
+          </div>
+        )}
 
         {/* Résultats recherche projets */}
         {projectSearch.trim() && (
@@ -1799,7 +1866,6 @@ export default function PartnerMapFrance() {
 
                           {isAdmin && (
                             <div className="flex items-center gap-1">
-                              {/* Modifier partenaire */}
                               <EditPartnerDialog
                                 partner={p}
                                 onSave={(updated) => {
@@ -1819,7 +1885,6 @@ export default function PartnerMapFrance() {
                                 }}
                               />
 
-                              {/* Supprimer partenaire */}
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -1907,14 +1972,11 @@ export default function PartnerMapFrance() {
                                       Zone : {c.territory}
                                     </div>
                                   )}
-                                  {/* On NE montre PAS les comptes nommés ici
-                                      pour éviter la surcharge visuelle. */}
                                 </div>
                               </div>
 
                               {isAdmin && (
                                 <div className="flex items-center gap-1">
-                                  {/* Modifier contact */}
                                   <EditContactDialog
                                     contact={c}
                                     onSave={(updated) => {
@@ -1951,7 +2013,6 @@ export default function PartnerMapFrance() {
                                     }}
                                   />
 
-                                  {/* Supprimer contact */}
                                   <button
                                     onClick={() =>
                                       handleDeleteContact(i)
