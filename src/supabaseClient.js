@@ -1,15 +1,13 @@
+// src/supabaseClient.js
 import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  console.error("❌ Supabase env vars manquantes :", {
-    supabaseUrl,
-    hasAnonKey: !!supabaseAnonKey,
-  });
-  throw new Error(
-    "Supabase non configuré : vérifie VITE_SUPABASE_URL et VITE_SUPABASE_ANON_KEY"
+  console.warn(
+    "[Supabase] VITE_SUPABASE_URL ou VITE_SUPABASE_ANON_KEY manquants. " +
+      "Vérifie ton .env.local en local et les variables d'env sur Vercel."
   );
 }
 
