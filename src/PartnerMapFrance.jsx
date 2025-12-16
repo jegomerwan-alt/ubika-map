@@ -1,9 +1,4 @@
-import React, {
-  useState,
-  useEffect,
-  useRef,
-  useMemo,
-} from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { motion } from "framer-motion";
 import france from "@svg-maps/france.regions";
 import {
@@ -13,17 +8,17 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { supabase } from "./supabaseClient"; // ou `import supabase from "./supabaseClient";` si export default
+import { supabase } from "./supabaseClient";
 
 const STORAGE_KEY = "partner-map-france:v1";
-const ADMIN_PASSWORD = "admin1234"; // 🔐 Mot de passe admin
+const ADMIN_PASSWORD = "admin1234";
 
 // Palette Ubika
-const UBIKA_PURPLE = "#7b2cbf"; // sélection
-const UBIKA_TURQUOISE = "#00bfa6"; // hover
-const UBIKA_BASE = "#b8a9c9"; // repos (lavande douce)
+const UBIKA_PURPLE = "#7b2cbf";
+const UBIKA_TURQUOISE = "#00bfa6";
+const UBIKA_BASE = "#b8a9c9";
 
-// Helper image -> dataURL (pour photo contact / logo)
+// Helper image -> dataURL
 async function fileToDataUrl(file, maxSize = 256) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -72,7 +67,82 @@ function parseCsv(text) {
   return rows;
 }
 
-// Données d'exemple: 1 partenaire "Test" par région
+/** ✅ Normalisation recherche (accents/apostrophes/ponctuation/espaces) */
+function normalizeSearch(input = "") {
+  return String(input)
+    .trim()
+    .toLowerCase()
+    .replace(/[\u2019\u2018\u2032\u00B4]/g, "'")
+    .replace(/[’']/g, "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeQuery(q = "") {
+  const n = normalizeSearch(q);
+  return n ? n.split(" ").filter(Boolean) : [];
+}
+
+function tokensMatch(haystackNormalized = "", tokens = []) {
+  if (!tokens.length) return true;
+  return tokens.every((t) => haystackNormalized.includes(t));
+}
+
+/** ✅ AJOUT: force un champ à être un tableau de strings (gère string “Véolia; Orange”) */
+function ensureStringArray(val) {
+  if (Array.isArray(val)) {
+    return val
+      .map((x) => String(x || "").replace(/\u00A0/g, " ").trim())
+      .filter(Boolean);
+  }
+  if (typeof val === "string") {
+    return val
+      .split(/[;,]/)
+      .map((v) => String(v).replace(/\u00A0/g, " ").trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+/** ✅ AJOUT: récupère les comptes nommés même si ton JSON a une clé legacy différente */
+function getNamedAccounts(contact) {
+  return ensureStringArray(
+    contact?.namedAccounts ??
+      contact?.namedAccountsText ??   // ✅ cas où c’est stocké en texte
+      contact?.accounts ??
+      contact?.account ??
+      contact?.NamedAccounts ??
+      contact?.Accounts ??
+      contact?.namedaccounts
+  );
+}
+
+
+/** ✅ Alias régions CSV (PACA, IDF, etc.) */
+function regionAliases(regionName = "") {
+  const base = normalizeSearch(regionName);
+  const aliases = new Set([base]);
+
+  if (
+    base.includes("provence") &&
+    base.includes("alpes") &&
+    (base.includes("cote") || base.includes("azur"))
+  ) {
+    aliases.add("paca");
+  }
+  if (base.includes("ile") && base.includes("france")) aliases.add("idf");
+  if (base.includes("hauts") && base.includes("france")) aliases.add("hdf");
+  if (base.includes("bourgogne") && base.includes("franche")) aliases.add("bfc");
+  if (base.includes("nouvelle") && base.includes("aquitaine")) aliases.add("na");
+  if (base.includes("auvergne") && base.includes("rhone")) aliases.add("aura");
+
+  return aliases;
+}
+
+// Données d'exemple
 const SAMPLE_DATA = {
   regions: france.locations.map((loc) => ({
     id: loc.id,
@@ -91,7 +161,7 @@ const SAMPLE_DATA = {
   })),
 };
 
-// Normalisation des données (on s'aligne toujours sur la carte SVG)
+// Normalisation des données (aligné sur la carte SVG)
 function normalizeData(raw) {
   const existingRegions = Array.isArray(raw?.regions) ? raw.regions : [];
 
@@ -115,8 +185,9 @@ function normalizeData(raw) {
         ...p,
         contacts: (p.contacts || []).map((c) => ({
           ...c,
-          verticals: c.verticals || [],
-          namedAccounts: c.namedAccounts || [],
+          verticals: ensureStringArray(c.verticals),
+          // ✅ CRUCIAL: on “répare” namedAccounts même s’il est stocké en string
+          namedAccounts: getNamedAccounts(c),
           territory: c.territory || "",
         })),
         projects: p.projects || [],
@@ -157,6 +228,7 @@ function FranceSvg({ onSelect, hoveredId, setHoveredId, selectedId }) {
           : isHovered
           ? UBIKA_TURQUOISE
           : UBIKA_BASE;
+
         return (
           <g key={id}>
             <motion.path
@@ -228,9 +300,7 @@ function AddContactInline({ onAdd }) {
           handleFiles(e.dataTransfer?.files || null);
         }}
         className="border border-dashed rounded-xl p-3 text-sm text-center cursor-pointer"
-        onClick={() =>
-          document.getElementById("contact-photo-input")?.click()
-        }
+        onClick={() => document.getElementById("contact-photo-input")?.click()}
       >
         {form.photo ? (
           <div className="flex items-center gap-3 justify-center">
@@ -257,9 +327,7 @@ function AddContactInline({ onAdd }) {
           className="border rounded px-2 py-1 text-gray-900"
           placeholder="Prénom"
           value={form.firstName}
-          onChange={(e) =>
-            setForm({ ...form, firstName: e.target.value })
-          }
+          onChange={(e) => setForm({ ...form, firstName: e.target.value })}
         />
         <input
           className="border rounded px-2 py-1 text-gray-900"
@@ -291,36 +359,25 @@ function AddContactInline({ onAdd }) {
         className="border rounded px-2 py-1 w-full text-gray-900 text-xs"
         placeholder="Verticals (séparés par des virgules) ex: Industrie, Public"
         value={form.verticals}
-        onChange={(e) =>
-          setForm({ ...form, verticals: e.target.value })
-        }
+        onChange={(e) => setForm({ ...form, verticals: e.target.value })}
       />
       <input
         className="border rounded px-2 py-1 w-full text-gray-900 text-xs"
         placeholder="Comptes nommés (séparés par des virgules)"
         value={form.namedAccounts}
-        onChange={(e) =>
-          setForm({ ...form, namedAccounts: e.target.value })
-        }
+        onChange={(e) => setForm({ ...form, namedAccounts: e.target.value })}
       />
       <input
         className="border rounded px-2 py-1 w-full text-gray-900 text-xs"
         placeholder="Zone (ex: Sud, IDF, National)"
         value={form.territory}
-        onChange={(e) =>
-          setForm({ ...form, territory: e.target.value })
-        }
+        onChange={(e) => setForm({ ...form, territory: e.target.value })}
       />
 
       <button
         className="w-full rounded-lg bg-purple-600 text-white px-3 py-2 text-sm font-medium hover:bg-purple-700"
         onClick={() => {
-          if (
-            form.firstName ||
-            form.lastName ||
-            form.email ||
-            form.phone
-          ) {
+          if (form.firstName || form.lastName || form.email || form.phone) {
             onAdd(form);
             setForm({
               photo: "",
@@ -348,7 +405,7 @@ function AddContactDialog({ onAdd }) {
   const normalizeListLocal = (s) =>
     (s || "")
       .split(/[;,]/)
-      .map((v) => v.trim())
+      .map((v) => String(v).replace(/\u00A0/g, " ").trim())
       .filter(Boolean);
 
   return (
@@ -412,9 +469,7 @@ function AddProjectDialog({ onAdd }) {
             className="border rounded px-2 py-1 w-full text-gray-900"
             placeholder="Nom du projet *"
             value={form.name}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, name: e.target.value }))
-            }
+            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
           />
           <textarea
             className="border rounded px-2 py-1 w-full text-gray-900"
@@ -549,32 +604,24 @@ function AddPartnerDialog({ onAdd }) {
             className="border rounded px-2 py-1 text-gray-900"
             placeholder="Nom *"
             value={form.name}
-            onChange={(e) =>
-              setForm({ ...form, name: e.target.value })
-            }
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
           />
           <input
             className="border rounded px-2 py-1 text-gray-900"
             placeholder="Adresse"
             value={form.address}
-            onChange={(e) =>
-              setForm({ ...form, address: e.target.value })
-            }
+            onChange={(e) => setForm({ ...form, address: e.target.value })}
           />
           <input
             className="border rounded px-2 py-1 text-gray-900"
             placeholder="Ville"
             value={form.city}
-            onChange={(e) =>
-              setForm({ ...form, city: e.target.value })
-            }
+            onChange={(e) => setForm({ ...form, city: e.target.value })}
           />
           <select
             className="border rounded px-2 py-1 text-gray-900"
             value={form.status}
-            onChange={(e) =>
-              setForm({ ...form, status: e.target.value })
-            }
+            onChange={(e) => setForm({ ...form, status: e.target.value })}
           >
             <option value="bronze">Bronze</option>
             <option value="silver">Silver</option>
@@ -636,9 +683,7 @@ function ImportCsvDialog({ onImport }) {
         setError("Erreur lors de la lecture du fichier.");
       }
     };
-    reader.onerror = () => {
-      setError("Impossible de lire le fichier.");
-    };
+    reader.onerror = () => setError("Impossible de lire le fichier.");
     reader.readAsText(file, "utf-8");
   };
 
@@ -676,9 +721,7 @@ region,partner,city,address,status,firstName,lastName,title,email,phone,account
               handleFiles(e.dataTransfer?.files || null);
             }}
             className="border border-dashed rounded-lg p-4 text-center cursor-pointer"
-            onClick={() =>
-              document.getElementById("csv-import-input")?.click()
-            }
+            onClick={() => document.getElementById("csv-import-input")?.click()}
           >
             Glisse ton fichier ici ou clique pour parcourir…
           </div>
@@ -691,8 +734,8 @@ region,partner,city,address,status,firstName,lastName,title,email,phone,account
           />
           {error && <p className="text-xs text-red-600">{error}</p>}
           <p className="text-xs text-gray-500">
-            Les lignes sont associées aux régions via la colonne{" "}
-            <code>region</code> (nom affiché sur la carte).
+            Les lignes sont associées aux régions via <code>region</code>. Matching
+            tolérant + alias (ex: <code>PACA</code>).
           </p>
         </div>
       </DialogContent>
@@ -739,7 +782,6 @@ function EditPartnerDialog({ partner, onSave }) {
           className="p-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100"
           title="Modifier ce partenaire"
         >
-          {/* Icône crayon */}
           <svg
             xmlns="http://www.w3.org/2000/svg"
             className="h-4 w-4"
@@ -792,37 +834,30 @@ function EditPartnerDialog({ partner, onSave }) {
             className="border rounded px-2 py-1 text-gray-900"
             placeholder="Nom *"
             value={form.name}
-            onChange={(e) =>
-              setForm({ ...form, name: e.target.value })
-            }
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
           />
           <input
             className="border rounded px-2 py-1 text-gray-900"
             placeholder="Adresse"
             value={form.address}
-            onChange={(e) =>
-              setForm({ ...form, address: e.target.value })
-            }
+            onChange={(e) => setForm({ ...form, address: e.target.value })}
           />
           <input
             className="border rounded px-2 py-1 text-gray-900"
             placeholder="Ville"
             value={form.city}
-            onChange={(e) =>
-              setForm({ ...form, city: e.target.value })
-            }
+            onChange={(e) => setForm({ ...form, city: e.target.value })}
           />
           <select
             className="border rounded px-2 py-1 text-gray-900"
             value={form.status}
-            onChange={(e) =>
-              setForm({ ...form, status: e.target.value })
-            }
+            onChange={(e) => setForm({ ...form, status: e.target.value })}
           >
             <option value="bronze">Bronze</option>
             <option value="silver">Silver</option>
             <option value="gold">Gold</option>
           </select>
+
           <div className="flex justify-end gap-2 mt-2">
             <button
               className="rounded-lg border px-3 py-1.5 text-sm"
@@ -847,6 +882,13 @@ function EditPartnerDialog({ partner, onSave }) {
   );
 }
 
+function normalizeList(str) {
+  return (str || "")
+    .split(/[;,]/)
+    .map((v) => String(v).replace(/\u00A0/g, " ").trim())
+    .filter(Boolean);
+}
+
 function EditContactDialog({ contact, onSave }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({
@@ -856,8 +898,8 @@ function EditContactDialog({ contact, onSave }) {
     title: contact.title || "",
     email: contact.email || "",
     phone: contact.phone || "",
-    verticalsText: (contact.verticals || []).join(", "),
-    namedAccountsText: (contact.namedAccounts || []).join(", "),
+    verticalsText: ensureStringArray(contact.verticals).join(", "),
+    namedAccountsText: getNamedAccounts(contact).join(", "),
     territory: contact.territory || "",
   });
 
@@ -869,8 +911,8 @@ function EditContactDialog({ contact, onSave }) {
       title: contact.title || "",
       email: contact.email || "",
       phone: contact.phone || "",
-      verticalsText: (contact.verticals || []).join(", "),
-      namedAccountsText: (contact.namedAccounts || []).join(", "),
+      verticalsText: ensureStringArray(contact.verticals).join(", "),
+      namedAccountsText: getNamedAccounts(contact).join(", "),
       territory: contact.territory || "",
     });
   }, [contact]);
@@ -898,7 +940,6 @@ function EditContactDialog({ contact, onSave }) {
           className="p-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100"
           title="Modifier ce contact"
         >
-          {/* Crayon */}
           <svg
             xmlns="http://www.w3.org/2000/svg"
             className="h-4 w-4"
@@ -914,6 +955,7 @@ function EditContactDialog({ contact, onSave }) {
         <DialogHeader>
           <DialogTitle>Modifier le contact</DialogTitle>
         </DialogHeader>
+
         <div className="space-y-3 mt-3">
           <div
             onDragOver={(e) => e.preventDefault()}
@@ -946,24 +988,22 @@ function EditContactDialog({ contact, onSave }) {
             className="hidden"
             onChange={(e) => handleFiles(e.target.files)}
           />
+
           <div className="grid grid-cols-2 gap-2">
             <input
               className="border rounded px-2 py-1 text-gray-900"
               placeholder="Prénom"
               value={form.firstName}
-              onChange={(e) =>
-                setForm({ ...form, firstName: e.target.value })
-              }
+              onChange={(e) => setForm({ ...form, firstName: e.target.value })}
             />
             <input
               className="border rounded px-2 py-1 text-gray-900"
               placeholder="Nom"
               value={form.lastName}
-              onChange={(e) =>
-                setForm({ ...form, lastName: e.target.value })
-              }
+              onChange={(e) => setForm({ ...form, lastName: e.target.value })}
             />
           </div>
+
           <input
             className="border rounded px-2 py-1 w-full text-gray-900"
             placeholder="Poste"
@@ -1003,9 +1043,7 @@ function EditContactDialog({ contact, onSave }) {
             className="border rounded px-2 py-1 w-full text-gray-900 text-xs"
             placeholder="Zone (ex: Sud, IDF, National)"
             value={form.territory}
-            onChange={(e) =>
-              setForm({ ...form, territory: e.target.value })
-            }
+            onChange={(e) => setForm({ ...form, territory: e.target.value })}
           />
 
           <div className="flex justify-end gap-2">
@@ -1020,16 +1058,18 @@ function EditContactDialog({ contact, onSave }) {
               className="rounded-lg bg-purple-600 text-white px-3 py-1.5 text-sm disabled:opacity-50 hover:bg-purple-700"
               onClick={() => {
                 const payload = {
-                  photo: form.photo,
-                  firstName: form.firstName,
-                  lastName: form.lastName,
-                  title: form.title,
-                  email: form.email,
-                  phone: form.phone,
-                  verticals: normalizeList(form.verticalsText),
-                  namedAccounts: normalizeList(form.namedAccountsText),
-                  territory: (form.territory || "").trim(),
-                };
+  photo: form.photo,
+  firstName: form.firstName,
+  lastName: form.lastName,
+  title: form.title,
+  email: form.email,
+  phone: form.phone,
+  verticals: normalizeList(form.verticalsText),
+  namedAccounts: normalizeList(form.namedAccountsText),
+  namedAccountsText: form.namedAccountsText, // ✅ on garde le texte aussi
+  territory: (form.territory || "").trim(),
+};
+
                 onSave(payload);
                 setOpen(false);
               }}
@@ -1041,14 +1081,6 @@ function EditContactDialog({ contact, onSave }) {
       </DialogContent>
     </Dialog>
   );
-}
-
-// helper global
-function normalizeList(str) {
-  return (str || "")
-    .split(/[;,]/)
-    .map((v) => v.trim())
-    .filter(Boolean);
 }
 
 // Édition projet
@@ -1099,9 +1131,7 @@ function EditProjectDialog({ project, onSave }) {
             className="border rounded px-2 py-1 w-full text-gray-900"
             placeholder="Nom du projet *"
             value={form.name}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, name: e.target.value }))
-            }
+            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
           />
           <textarea
             className="border rounded px-2 py-1 w-full text-gray-900"
@@ -1170,7 +1200,7 @@ export default function PartnerMapFrance() {
   const [projectSearch, setProjectSearch] = useState("");
   const [accountSearch, setAccountSearch] = useState("");
 
-  // Chargement initial depuis Supabase (avec fallback localStorage/SAMPLE_DATA)
+  // Load Supabase
   useEffect(() => {
     async function load() {
       console.log("[LOAD] Début du chargement…");
@@ -1189,15 +1219,13 @@ export default function PartnerMapFrance() {
 
           // Fallback localStorage
           try {
-            if (typeof window !== "undefined") {
-              const raw = window.localStorage.getItem(STORAGE_KEY);
-              if (raw) {
-                console.log("[LOAD] Chargement depuis localStorage");
-                const parsed = JSON.parse(raw);
-                setData(normalizeData(parsed));
-                setLoading(false);
-                return;
-              }
+            const raw = window.localStorage.getItem(STORAGE_KEY);
+            if (raw) {
+              console.log("[LOAD] Chargement depuis localStorage");
+              const parsed = JSON.parse(raw);
+              setData(normalizeData(parsed));
+              setLoading(false);
+              return;
             }
           } catch (e) {
             console.error("[LOAD] Erreur localStorage:", e);
@@ -1227,36 +1255,44 @@ export default function PartnerMapFrance() {
 
     load();
   }, []);
+  
+useEffect(() => {
+  if (!data) return;
 
-  // Sauvegarde vers Supabase + backup localStorage
+  const all = [];
+  data.regions.forEach((r) =>
+    r.partners.forEach((p) =>
+      (p.contacts || []).forEach((c) => {
+        getNamedAccounts(c).forEach((a) => all.push(a));
+      })
+    )
+  );
+
+  console.log("[DEBUG] named accounts count =", all.length);
+  console.log("[DEBUG] named accounts sample =", all.slice(0, 20));
+  console.log(
+    "[DEBUG] contains veol? =",
+    all.some((a) => normalizeSearch(a).includes("veol"))
+  );
+}, [data]);
+
+  // Save Supabase + localStorage
   useEffect(() => {
     if (!data) return;
-
-    console.log("[SAVE] data modifiée, lancement de la sauvegarde…", data);
 
     async function save() {
       try {
         const { error } = await supabase
           .from("partner_map")
-          .upsert(
-            { id: "france", data },
-            { onConflict: "id" }
-          );
+          .upsert({ id: "france", data }, { onConflict: "id" });
 
-        if (error) {
-          console.error("[SAVE] Erreur Supabase save:", error);
-        } else {
-          console.log("[SAVE] Supabase OK");
-        }
+        if (error) console.error("[SAVE] Erreur Supabase save:", error);
       } catch (e) {
         console.error("[SAVE] Exception Supabase save:", e);
       }
 
       try {
-        if (typeof window !== "undefined") {
-          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-          console.log("[SAVE] localStorage OK");
-        }
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
       } catch (e) {
         console.error("[SAVE] Erreur localStorage:", e);
       }
@@ -1265,7 +1301,6 @@ export default function PartnerMapFrance() {
     save();
   }, [data]);
 
-  // selectedRegion robuste : par id puis par nom si besoin
   const selectedRegion = useMemo(() => {
     if (!data || !selectedRegionId) return null;
 
@@ -1287,28 +1322,21 @@ export default function PartnerMapFrance() {
       : null;
 
   const handleToggleAdmin = () => {
-    if (isAdmin) {
-      setIsAdmin(false);
-    } else {
+    if (isAdmin) setIsAdmin(false);
+    else {
       const pwd = window.prompt("Mot de passe admin ?");
       if (pwd === null) return;
-      if (pwd === ADMIN_PASSWORD) {
-        setIsAdmin(true);
-      } else {
-        window.alert("Mot de passe incorrect");
-      }
+      if (pwd === ADMIN_PASSWORD) setIsAdmin(true);
+      else window.alert("Mot de passe incorrect");
     }
   };
 
   const handleDeletePartner = (partnerIndex) => {
     if (!selectedRegion || !data) return;
-
     const partner = selectedRegion.partners[partnerIndex];
     if (!partner) return;
 
-    const ok = window.confirm(
-      `Supprimer le partenaire "${partner.name}" ?`
-    );
+    const ok = window.confirm(`Supprimer le partenaire "${partner.name}" ?`);
     if (!ok) return;
 
     setData((prev) => ({
@@ -1329,7 +1357,6 @@ export default function PartnerMapFrance() {
 
   const handleDeleteContact = (contactIndex) => {
     if (!activePartner || !selectedRegion || !data) return;
-
     const contact = activePartner.contacts?.[contactIndex];
     if (!contact) return;
 
@@ -1357,13 +1384,10 @@ export default function PartnerMapFrance() {
 
   const handleDeleteProject = (projectIndex) => {
     if (!activePartner || !selectedRegion || !data) return;
-
     const project = activePartner.projects?.[projectIndex];
     if (!project) return;
 
-    const ok = window.confirm(
-      `Supprimer le projet "${project.name}" ?`
-    );
+    const ok = window.confirm(`Supprimer le projet "${project.name}" ?`);
     if (!ok) return;
 
     setData((prev) => ({
@@ -1383,22 +1407,24 @@ export default function PartnerMapFrance() {
     }));
   };
 
-  // Recherche globale de projets
+  // Recherche projets (tolérante accents)
   const filteredProjects = useMemo(() => {
-    const q = projectSearch.trim().toLowerCase();
-    if (!q || !data) return [];
+    const tokens = tokenizeQuery(projectSearch);
+    if (!tokens.length || !data) return [];
+
     const results = [];
 
     data.regions.forEach((region) => {
       region.partners.forEach((partner, partnerIndex) => {
         (partner.projects || []).forEach((project) => {
-          if ((project.name || "").toLowerCase().includes(q)) {
-            results.push({
-              project,
-              partner,
-              region,
-              partnerIndex,
-            });
+          const haystack = normalizeSearch(
+            [project.name, partner.name, region.name, project.icName, project.description]
+              .filter(Boolean)
+              .join(" ")
+          );
+
+          if (tokensMatch(haystack, tokens)) {
+            results.push({ project, partner, region, partnerIndex });
           }
         });
       });
@@ -1407,17 +1433,27 @@ export default function PartnerMapFrance() {
     return results;
   }, [data, projectSearch]);
 
-  // Recherche globale par compte nommé (utilise namedAccounts des contacts)
+  // ✅ Recherche comptes nommés (robuste legacy + accents)
   const filteredAccounts = useMemo(() => {
-    const q = accountSearch.trim().toLowerCase();
-    if (!q || !data) return [];
+    const tokens = tokenizeQuery(accountSearch);
+    if (!tokens.length || !data) return [];
+
     const results = [];
 
     data.regions.forEach((region) => {
       region.partners.forEach((partner, partnerIndex) => {
         (partner.contacts || []).forEach((contact) => {
-          (contact.namedAccounts || []).forEach((accName) => {
-            if ((accName || "").toLowerCase().includes(q)) {
+          // IMPORTANT: on utilise le getter robuste
+          const accounts = getNamedAccounts(contact);
+
+          accounts.forEach((accName) => {
+            const haystack = normalizeSearch(
+              [accName, contact.firstName, contact.lastName, contact.email, contact.title, contact.territory, partner.name, region.name]
+                .filter(Boolean)
+                .join(" ")
+            );
+
+            if (tokensMatch(haystack, tokens)) {
               results.push({
                 accountName: accName,
                 contact,
@@ -1434,27 +1470,32 @@ export default function PartnerMapFrance() {
     return results;
   }, [data, accountSearch]);
 
-  // Import CSV avec prise en compte des comptes nommés
+  // Import CSV (région tolérante + comptes nommés)
   const handleImportCsv = (rows) => {
     if (!data) return;
+
     setData((prev) => {
       const nextRegions = prev.regions.map((r) => {
+        const aliases = regionAliases(r.name || "");
+
         const rowsForRegion = rows.filter((row) => {
           const rn = row.region || row.Region || "";
-          return rn.trim() === (r.name || "").trim();
+          const rnNorm = normalizeSearch(rn);
+          return aliases.has(rnNorm);
         });
+
         if (!rowsForRegion.length) return r;
 
         let partners = [...r.partners];
 
         rowsForRegion.forEach((row) => {
-          const partnerName =
-            row.partner || row.PARTNER || row.Partner || "";
+          const partnerName = row.partner || row.PARTNER || row.Partner || "";
           if (!partnerName) return;
 
           let idx = partners.findIndex(
-            (p) => (p.name || "").trim() === partnerName.trim()
+            (p) => normalizeSearch(p.name || "") === normalizeSearch(partnerName)
           );
+
           if (idx === -1) {
             partners.push({
               name: partnerName,
@@ -1472,16 +1513,8 @@ export default function PartnerMapFrance() {
 
           const baseContact = {
             photo: "",
-            firstName:
-              row.firstName ||
-              row.firstname ||
-              row.FirstName ||
-              "",
-            lastName:
-              row.lastName ||
-              row.lastname ||
-              row.LastName ||
-              "",
+            firstName: row.firstName || row.firstname || row.FirstName || "",
+            lastName: row.lastName || row.lastname || row.LastName || "",
             title: row.title || row.Title || "",
             email: row.email || row.Email || "",
             phone: row.phone || row.Phone || "",
@@ -1495,10 +1528,8 @@ export default function PartnerMapFrance() {
             row.namedAccounts ||
             row.NamedAccounts ||
             "";
-          const accountsList = (accountsRaw || "")
-            .split(/[;,]/)
-            .map((v) => v.trim())
-            .filter(Boolean);
+
+          const accountsList = ensureStringArray(accountsRaw);
 
           if (
             !baseContact.firstName &&
@@ -1510,24 +1541,16 @@ export default function PartnerMapFrance() {
             return;
           }
 
-          let matchIndex = contacts.findIndex((c) => {
+          const matchIndex = contacts.findIndex((c) => {
             if (baseContact.email && c.email) {
               return (
-                c.email.trim().toLowerCase() ===
-                baseContact.email.trim().toLowerCase()
+                c.email.trim().toLowerCase() === baseContact.email.trim().toLowerCase()
               );
             }
-            if (
-              baseContact.firstName &&
-              baseContact.lastName &&
-              c.firstName &&
-              c.lastName
-            ) {
+            if (baseContact.firstName && baseContact.lastName && c.firstName && c.lastName) {
               return (
-                c.firstName.trim().toLowerCase() ===
-                  baseContact.firstName.trim().toLowerCase() &&
-                c.lastName.trim().toLowerCase() ===
-                  baseContact.lastName.trim().toLowerCase()
+                normalizeSearch(c.firstName) === normalizeSearch(baseContact.firstName) &&
+                normalizeSearch(c.lastName) === normalizeSearch(baseContact.lastName)
               );
             }
             return false;
@@ -1545,42 +1568,31 @@ export default function PartnerMapFrance() {
             ];
           } else {
             const existing = contacts[matchIndex];
-
             const updated = { ...existing };
-            ["firstName", "lastName", "title", "email", "phone"].forEach(
-              (field) => {
-                if (baseContact[field]) {
-                  updated[field] = baseContact[field];
-                }
-              }
-            );
+
+            ["firstName", "lastName", "title", "email", "phone"].forEach((field) => {
+              if (baseContact[field]) updated[field] = baseContact[field];
+            });
 
             const mergedAccounts = [
-              ...(existing.namedAccounts || []),
+              ...getNamedAccounts(existing),
               ...accountsList,
             ]
-              .map((a) => a.trim())
+              .map((a) => String(a).replace(/\u00A0/g, " ").trim())
               .filter(Boolean);
 
-            const uniqueLower = [
-              ...new Set(mergedAccounts.map((a) => a.toLowerCase())),
-            ];
-
-            const uniqueAccounts = uniqueLower.map((lower) =>
-              mergedAccounts.find((a) => a.toLowerCase() === lower)
-            );
+            // dédoublonnage accent-proof
+            const uniqueKeys = [...new Set(mergedAccounts.map((a) => normalizeSearch(a)))];
+            const uniqueAccounts = uniqueKeys
+              .map((k) => mergedAccounts.find((a) => normalizeSearch(a) === k))
+              .filter(Boolean);
 
             updated.namedAccounts = uniqueAccounts;
 
-            contacts = contacts.map((c, ci) =>
-              ci === matchIndex ? updated : c
-            );
+            contacts = contacts.map((c, ci) => (ci === matchIndex ? updated : c));
           }
 
-          partners[idx] = {
-            ...partners[idx],
-            contacts,
-          };
+          partners[idx] = { ...partners[idx], contacts };
         });
 
         return { ...r, partners };
@@ -1603,7 +1615,6 @@ export default function PartnerMapFrance() {
   return (
     <div className="relative min-h-screen bg-gradient-to-b from-[#f5f0fa] to-[#e8f9f6] p-6">
       <div className="mx-auto max-w-6xl space-y-4">
-        {/* Header global */}
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <h1 className="text-2xl font-semibold tracking-tight text-[#5a189a]">
             Carte des partenaires
@@ -1652,7 +1663,6 @@ export default function PartnerMapFrance() {
           </div>
         )}
 
-        {/* Résultats recherche projets */}
         {projectSearch.trim() && (
           <div className="rounded-xl border bg-white shadow-sm p-3 text-xs">
             <div className="flex items-center justify-between mb-1">
@@ -1660,51 +1670,39 @@ export default function PartnerMapFrance() {
                 Projets correspondant à “{projectSearch}”
               </span>
               <span className="text-gray-500">
-                {filteredProjects.length} projet
-                {filteredProjects.length > 1 ? "s" : ""}
+                {filteredProjects.length} projet{filteredProjects.length > 1 ? "s" : ""}
               </span>
             </div>
             {filteredProjects.length === 0 ? (
-              <p className="text-gray-500">
-                Aucun projet trouvé correspondant à cette recherche.
-              </p>
+              <p className="text-gray-500">Aucun projet trouvé correspondant à cette recherche.</p>
             ) : (
               <ul className="space-y-1 max-h-40 overflow-auto pr-1">
-                {filteredProjects.map(
-                  ({ project, partner, region, partnerIndex }, idx) => (
-                    <li
-                      key={`${region.id}-${partnerIndex}-${project.name}-${idx}`}
-                      className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 hover:bg-gray-50 cursor-pointer"
-                      onClick={() => {
-                        setSelectedRegionId(region.id);
-                        setActivePartnerIndex(partnerIndex);
-                      }}
-                    >
-                      <div>
-                        <div className="font-semibold text-gray-800">
-                          {project.name}
-                        </div>
-                        <div className="text-gray-600">
-                          {partner.name} · {region.name}
-                        </div>
-                        {project.icName && (
-                          <div className="text-gray-500">
-                            IC : {project.icName}
-                          </div>
-                        )}
+                {filteredProjects.map(({ project, partner, region, partnerIndex }, idx) => (
+                  <li
+                    key={`${region.id}-${partnerIndex}-${project.name}-${idx}`}
+                    className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 hover:bg-gray-50 cursor-pointer"
+                    onClick={() => {
+                      setSelectedRegionId(region.id);
+                      setActivePartnerIndex(partnerIndex);
+                    }}
+                  >
+                    <div>
+                      <div className="font-semibold text-gray-800">{project.name}</div>
+                      <div className="text-gray-600">
+                        {partner.name} · {region.name}
                       </div>
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-50 text-purple-700 border border-purple-100">
-                        {project.status || "En cours"}
-                      </span>
-                    </li>
-                  )
-                )}
+                      {project.icName && <div className="text-gray-500">IC : {project.icName}</div>}
+                    </div>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-50 text-purple-700 border border-purple-100">
+                      {project.status || "En cours"}
+                    </span>
+                  </li>
+                ))}
               </ul>
             )}
           </div>
         )}
 
-        {/* Résultats recherche comptes nommés */}
         {accountSearch.trim() && (
           <div className="rounded-xl border bg-white shadow-sm p-3 text-xs">
             <div className="flex items-center justify-between mb-1">
@@ -1712,53 +1710,40 @@ export default function PartnerMapFrance() {
                 Comptes nommés correspondant à “{accountSearch}”
               </span>
               <span className="text-gray-500">
-                {filteredAccounts.length} résultat
-                {filteredAccounts.length > 1 ? "s" : ""}
+                {filteredAccounts.length} résultat{filteredAccounts.length > 1 ? "s" : ""}
               </span>
             </div>
             {filteredAccounts.length === 0 ? (
-              <p className="text-gray-500">
-                Aucun compte nommé trouvé correspondant à cette recherche.
-              </p>
+              <p className="text-gray-500">Aucun compte nommé trouvé correspondant à cette recherche.</p>
             ) : (
               <ul className="space-y-1 max-h-40 overflow-auto pr-1">
-                {filteredAccounts.map(
-                  (
-                    { accountName, contact, partner, region, partnerIndex },
-                    idx
-                  ) => (
-                    <li
-                      key={`${region.id}-${partnerIndex}-${accountName}-${idx}`}
-                      className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 hover:bg-gray-50 cursor-pointer"
-                      onClick={() => {
-                        setSelectedRegionId(region.id);
-                        setActivePartnerIndex(partnerIndex);
-                      }}
-                    >
-                      <div>
-                        <div className="font-semibold text-gray-800">
-                          {accountName}
-                        </div>
-                        <div className="text-gray-600">
-                          {partner.name} · {region.name}
-                        </div>
-                        <div className="text-gray-600">
-                          Contact : {contact.firstName} {contact.lastName}
-                          {contact.territory
-                            ? ` · Zone : ${contact.territory}`
-                            : ""}
-                        </div>
+                {filteredAccounts.map(({ accountName, contact, partner, region, partnerIndex }, idx) => (
+                  <li
+                    key={`${region.id}-${partnerIndex}-${accountName}-${idx}`}
+                    className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 hover:bg-gray-50 cursor-pointer"
+                    onClick={() => {
+                      setSelectedRegionId(region.id);
+                      setActivePartnerIndex(partnerIndex);
+                    }}
+                  >
+                    <div>
+                      <div className="font-semibold text-gray-800">{accountName}</div>
+                      <div className="text-gray-600">
+                        {partner.name} · {region.name}
                       </div>
-                    </li>
-                  )
-                )}
+                      <div className="text-gray-600">
+                        Contact : {contact.firstName} {contact.lastName}
+                        {contact.territory ? ` · Zone : ${contact.territory}` : ""}
+                      </div>
+                    </div>
+                  </li>
+                ))}
               </ul>
             )}
           </div>
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Carte France */}
           <div className="rounded-2xl border bg-white shadow-md p-4 relative">
             <FranceSvg
               onSelect={(id) => {
@@ -1771,7 +1756,6 @@ export default function PartnerMapFrance() {
             />
           </div>
 
-          {/* Panneau de droite */}
           <div className="rounded-2xl border bg-white shadow-md p-4">
             {selectedRegion ? (
               <div>
@@ -1789,11 +1773,7 @@ export default function PartnerMapFrance() {
                                   ...r,
                                   partners: [
                                     ...r.partners,
-                                    {
-                                      ...partner,
-                                      contacts: [],
-                                      projects: [],
-                                    },
+                                    { ...partner, contacts: [], projects: [] },
                                   ],
                                 }
                               : r
@@ -1804,16 +1784,13 @@ export default function PartnerMapFrance() {
                   )}
                 </div>
 
-                {/* Liste des partenaires */}
                 <ul className="space-y-2">
                   {selectedRegion.partners.map((p, index) => (
                     <li key={index}>
                       <div
                         onClick={() => setActivePartnerIndex(index)}
                         className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 shadow-sm hover:shadow-md transition cursor-pointer ${
-                          activePartnerIndex === index
-                            ? "bg-gray-100"
-                            : "bg-white"
+                          activePartnerIndex === index ? "bg-gray-100" : "bg-white"
                         }`}
                       >
                         <div className="flex items-center flex-wrap gap-2">
@@ -1824,19 +1801,9 @@ export default function PartnerMapFrance() {
                               className="h-6 w-6 rounded bg-white border object-contain"
                             />
                           )}
-                          <span className="font-semibold text-gray-900">
-                            {p.name}
-                          </span>
-                          {p.city && (
-                            <span className="text-sm text-gray-700">
-                              • {p.city}
-                            </span>
-                          )}
-                          {p.address && (
-                            <span className="text-sm text-gray-700">
-                              • {p.address}
-                            </span>
-                          )}
+                          <span className="font-semibold text-gray-900">{p.name}</span>
+                          {p.city && <span className="text-sm text-gray-700">• {p.city}</span>}
+                          {p.address && <span className="text-sm text-gray-700">• {p.address}</span>}
                           <span
                             className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${
                               p.status === "gold"
@@ -1846,45 +1813,20 @@ export default function PartnerMapFrance() {
                                 : "bg-orange-200 text-orange-900 border-orange-400"
                             }`}
                           >
-                            {p.status.toUpperCase()}
+                            {String(p.status || "silver").toUpperCase()}
                           </span>
                         </div>
 
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-gray-500">
-                            {Array.isArray(p.contacts)
-                              ? p.contacts.length
-                              : 0}{" "}
-                            contacts
+                            {Array.isArray(p.contacts) ? p.contacts.length : 0} contacts
                           </span>
                           <span className="text-xs text-gray-500">
-                            {Array.isArray(p.projects)
-                              ? p.projects.length
-                              : 0}{" "}
-                            projets
+                            {Array.isArray(p.projects) ? p.projects.length : 0} projets
                           </span>
 
                           {isAdmin && (
                             <div className="flex items-center gap-1">
-                              <EditPartnerDialog
-                                partner={p}
-                                onSave={(updated) => {
-                                  setData((prev) => ({
-                                    regions: prev.regions.map((r) => {
-                                      if (r.id !== selectedRegion.id)
-                                        return r;
-                                      const partners = r.partners.map(
-                                        (pp, i) =>
-                                          i === index
-                                            ? { ...pp, ...updated }
-                                            : pp
-                                      );
-                                      return { ...r, partners };
-                                    }),
-                                  }));
-                                }}
-                              />
-
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -1893,18 +1835,7 @@ export default function PartnerMapFrance() {
                                 className="p-1.5 rounded-lg border border-red-300 text-red-600 hover:bg-red-50"
                                 title="Supprimer ce partenaire"
                               >
-                                <svg
-                                  xmlns="http://www.w3.org/2000/svg"
-                                  className="h-4 w-4"
-                                  viewBox="0 0 20 20"
-                                  fill="currentColor"
-                                >
-                                  <path
-                                    fillRule="evenodd"
-                                    d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2h12a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM5 6a1 1 0 011 1v9a2 2 0 002 2h4a2 2 0 002-2V7a1 1 1 112 0v9a4 4 0 01-4 4H8a4 4 0 01-4-4V7a1 1 0 011-1z"
-                                    clipRule="evenodd"
-                                  />
-                                </svg>
+                                🗑️
                               </button>
                             </div>
                           )}
@@ -1914,14 +1845,13 @@ export default function PartnerMapFrance() {
                   ))}
                 </ul>
 
-                {/* Panneau contacts + projets du partenaire actif */}
                 {activePartner && (
                   <div className="mt-4 rounded-xl border p-4 bg-white space-y-4">
-                    {/* Contacts */}
                     <div>
                       <h3 className="text-sm font-semibold mb-2">
                         Contacts — {activePartner.name}
                       </h3>
+
                       {activePartner.contacts?.length ? (
                         <div className="grid grid-cols-1 gap-2 mb-3">
                           {activePartner.contacts.map((c, i) => (
@@ -1941,32 +1871,35 @@ export default function PartnerMapFrance() {
                                     IMG
                                   </div>
                                 )}
+
                                 <div className="text-sm space-y-0.5">
                                   <div className="font-semibold text-gray-900">
                                     {c.firstName} {c.lastName}
                                   </div>
-                                  <div className="text-gray-700">
-                                    {c.title}
-                                  </div>
+                                  <div className="text-gray-700">{c.title}</div>
+
                                   <div className="text-gray-700">
                                     {c.email && (
-                                      <a
-                                        href={`mailto:${c.email}`}
-                                        className="underline"
-                                      >
+                                      <a href={`mailto:${c.email}`} className="underline">
                                         {c.email}
                                       </a>
                                     )}
                                     {c.email && c.phone ? " • " : ""}
                                     {c.phone}
                                   </div>
-                                  {c.verticals &&
-                                    c.verticals.length > 0 && (
-                                      <div className="text-[11px] text-gray-600">
-                                        Verticals :{" "}
-                                        {c.verticals.join(", ")}
-                                      </div>
-                                    )}
+
+                                  {ensureStringArray(c.verticals).length > 0 && (
+                                    <div className="text-[11px] text-gray-600">
+                                      Verticals : {ensureStringArray(c.verticals).join(", ")}
+                                    </div>
+                                  )}
+
+                                  {getNamedAccounts(c).length > 0 && (
+                                    <div className="text-[11px] text-gray-600">
+                                      Comptes : {getNamedAccounts(c).join(", ")}
+                                    </div>
+                                  )}
+
                                   {c.territory && (
                                     <div className="text-[11px] text-gray-500">
                                       Zone : {c.territory}
@@ -1982,31 +1915,22 @@ export default function PartnerMapFrance() {
                                     onSave={(updated) => {
                                       setData((prev) => ({
                                         regions: prev.regions.map((r) => {
-                                          if (
-                                            r.id !== selectedRegion.id
-                                          )
-                                            return r;
-                                          const partners =
-                                            r.partners.map((p2, pi) => {
-                                              if (
-                                                pi !== activePartnerIndex
-                                              )
-                                                return p2;
-                                              const newContacts =
-                                                p2.contacts.map(
-                                                  (cc, ci) =>
-                                                    ci === i
-                                                      ? {
-                                                          ...cc,
-                                                          ...updated,
-                                                        }
-                                                      : cc
-                                                );
-                                              return {
-                                                ...p2,
-                                                contacts: newContacts,
-                                              };
-                                            });
+                                          if (r.id !== selectedRegion.id) return r;
+                                          const partners = r.partners.map((p2, pi) => {
+                                            if (pi !== activePartnerIndex) return p2;
+                                            const newContacts = p2.contacts.map((cc, ci) =>
+                                              ci === i
+                                                ? {
+                                                    ...cc,
+                                                    ...updated,
+                                                    // ✅ on force au passage
+                                                    verticals: ensureStringArray(updated.verticals),
+                                                    namedAccounts: ensureStringArray(updated.namedAccounts),
+                                                  }
+                                                : cc
+                                            );
+                                            return { ...p2, contacts: newContacts };
+                                          });
                                           return { ...r, partners };
                                         }),
                                       }));
@@ -2014,24 +1938,11 @@ export default function PartnerMapFrance() {
                                   />
 
                                   <button
-                                    onClick={() =>
-                                      handleDeleteContact(i)
-                                    }
+                                    onClick={() => handleDeleteContact(i)}
                                     className="p-1.5 rounded-lg border border-red-300 text-red-600 hover:bg-red-50"
                                     title="Supprimer ce contact"
                                   >
-                                    <svg
-                                      xmlns="http://www.w3.org/2000/svg"
-                                      className="h-4 w-4"
-                                      viewBox="0 0 20 20"
-                                      fill="currentColor"
-                                    >
-                                      <path
-                                        fillRule="evenodd"
-                                        d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2h12a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM5 6a1 1 0 011 1v9a2 2 0 002 2h4a2 2 0 002-2V7a1 1 1 112 0v9a4 4 0 01-4 4H8a4 4 0 01-4-4V7a1 1 0 011-1z"
-                                        clipRule="evenodd"
-                                      />
-                                    </svg>
+                                    🗑️
                                   </button>
                                 </div>
                               )}
@@ -2045,7 +1956,6 @@ export default function PartnerMapFrance() {
                       )}
                     </div>
 
-                    {/* Projets */}
                     <div>
                       <h3 className="text-sm font-semibold mb-2">
                         Projets — {activePartner.name}
@@ -2062,9 +1972,7 @@ export default function PartnerMapFrance() {
                                   {proj.name}
                                 </div>
                                 {proj.icName && (
-                                  <div className="text-gray-700">
-                                    IC : {proj.icName}
-                                  </div>
+                                  <div className="text-gray-700">IC : {proj.icName}</div>
                                 )}
                                 {proj.description && (
                                   <div className="text-xs text-gray-600 mt-0.5">
@@ -2072,77 +1980,36 @@ export default function PartnerMapFrance() {
                                   </div>
                                 )}
                               </div>
-                              <div className="flex flex-col items-end gap-1">
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-50 text-purple-700 border border-purple-100">
-                                  {proj.status || "En cours"}
-                                </span>
-                                {isAdmin && (
-                                  <div className="flex items-center gap-1">
-                                    <EditProjectDialog
-                                      project={proj}
-                                      onSave={(updated) => {
-                                        setData((prev) => ({
-                                          regions: prev.regions.map(
-                                            (r) => {
-                                              if (
-                                                r.id !==
-                                                selectedRegion.id
-                                              )
-                                                return r;
-                                              const partners =
-                                                r.partners.map(
-                                                  (p2, pi) => {
-                                                    if (
-                                                      pi !==
-                                                      activePartnerIndex
-                                                    )
-                                                      return p2;
-                                                    const newProjects =
-                                                      p2.projects.map(
-                                                        (ppj, pji) =>
-                                                          pji === i
-                                                            ? {
-                                                                ...ppj,
-                                                                ...updated,
-                                                              }
-                                                            : ppj
-                                                      );
-                                                    return {
-                                                      ...p2,
-                                                      projects:
-                                                        newProjects,
-                                                    };
-                                                  }
-                                                );
-                                              return { ...r, partners };
-                                            }
-                                          ),
-                                        }));
-                                      }}
-                                    />
-                                    <button
-                                      onClick={() =>
-                                        handleDeleteProject(i)
-                                      }
-                                      className="p-1.5 rounded-lg border border-red-300 text-red-600 hover:bg-red-50"
-                                      title="Supprimer ce projet"
-                                    >
-                                      <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        className="h-4 w-4"
-                                        viewBox="0 0 20 20"
-                                        fill="currentColor"
-                                      >
-                                        <path
-                                          fillRule="evenodd"
-                                          d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2h12a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM5 6a1 1 0 011 1v9a2 2 0 002 2h4a2 2 0 002-2V7a1 1 1 112 0v9a4 4 0 01-4 4H8a4 4 0 01-4-4V7a1 1 0 011-1z"
-                                          clipRule="evenodd"
-                                        />
-                                      </svg>
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
+
+                              {isAdmin && (
+                                <div className="flex items-center gap-1">
+                                  <EditProjectDialog
+                                    project={proj}
+                                    onSave={(updated) => {
+                                      setData((prev) => ({
+                                        regions: prev.regions.map((r) => {
+                                          if (r.id !== selectedRegion.id) return r;
+                                          const partners = r.partners.map((p2, pi) => {
+                                            if (pi !== activePartnerIndex) return p2;
+                                            const newProjects = p2.projects.map((ppj, pji) =>
+                                              pji === i ? { ...ppj, ...updated } : ppj
+                                            );
+                                            return { ...p2, projects: newProjects };
+                                          });
+                                          return { ...r, partners };
+                                        }),
+                                      }));
+                                    }}
+                                  />
+                                  <button
+                                    onClick={() => handleDeleteProject(i)}
+                                    className="p-1.5 rounded-lg border border-red-300 text-red-600 hover:bg-red-50"
+                                    title="Supprimer ce projet"
+                                  >
+                                    🗑️
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>
@@ -2153,26 +2020,17 @@ export default function PartnerMapFrance() {
                       )}
                     </div>
 
-                    {/* Boutons création contact / projet */}
                     {isAdmin && (
                       <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-dashed mt-1">
                         <AddProjectDialog
                           onAdd={(project) => {
-                            if (!activePartner) return;
                             setData((prev) => ({
                               regions: prev.regions.map((r) => {
                                 if (r.id !== selectedRegion.id) return r;
-                                const partners = r.partners.map(
-                                  (pp, pi) =>
-                                    pi === activePartnerIndex
-                                      ? {
-                                          ...pp,
-                                          projects: [
-                                            ...(pp.projects || []),
-                                            project,
-                                          ],
-                                        }
-                                      : pp
+                                const partners = r.partners.map((pp, pi) =>
+                                  pi === activePartnerIndex
+                                    ? { ...pp, projects: [...(pp.projects || []), project] }
+                                    : pp
                                 );
                                 return { ...r, partners };
                               }),
@@ -2181,21 +2039,24 @@ export default function PartnerMapFrance() {
                         />
                         <AddContactDialog
                           onAdd={(contact) => {
-                            if (!activePartner) return;
                             setData((prev) => ({
                               regions: prev.regions.map((r) => {
                                 if (r.id !== selectedRegion.id) return r;
-                                const partners = r.partners.map(
-                                  (pp, pi) =>
-                                    pi === activePartnerIndex
-                                      ? {
-                                          ...pp,
-                                          contacts: [
-                                            ...(pp.contacts || []),
-                                            contact,
-                                          ],
-                                        }
-                                      : pp
+                                const partners = r.partners.map((pp, pi) =>
+                                  pi === activePartnerIndex
+                                    ? {
+                                        ...pp,
+                                        contacts: [
+                                          ...(pp.contacts || []),
+                                          {
+                                            ...contact,
+                                            // ✅ on force au passage
+                                            verticals: ensureStringArray(contact.verticals),
+                                            namedAccounts: ensureStringArray(contact.namedAccounts),
+                                          },
+                                        ],
+                                      }
+                                    : pp
                                 );
                                 return { ...r, partners };
                               }),
