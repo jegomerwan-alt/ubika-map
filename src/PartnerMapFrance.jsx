@@ -18,7 +18,11 @@ const UBIKA_PURPLE = "#7b2cbf";
 const UBIKA_TURQUOISE = "#00bfa6";
 const UBIKA_BASE = "#b8a9c9";
 
-// Helper image -> dataURL
+/* =========================
+   Helpers
+========================= */
+
+// Image -> dataURL (photo/logo)
 async function fileToDataUrl(file, maxSize = 256) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -43,8 +47,23 @@ async function fileToDataUrl(file, maxSize = 256) {
     reader.readAsDataURL(file);
   });
 }
+function normalizeRegionKey(str) {
+  return String(str || "")
+    .replace(/[\uFEFF\u200B-\u200D]/g, "") // BOM / zero-width
+    .replace(/[\u00A0\u202F]/g, " ")       // NBSP / narrow NBSP
+    .replace(/[‐-‒–—]/g, "-")              // tirets exotiques
+    .replace(/[’‘`´]/g, "'")               // apostrophes exotiques
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[']/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-// Petit parseur CSV simple (séparateur , ou ;)
+// CSV simple (séparateur , ou ;)
 function parseCsv(text) {
   const trimmed = text.trim();
   if (!trimmed) return [];
@@ -67,7 +86,7 @@ function parseCsv(text) {
   return rows;
 }
 
-/** ✅ Normalisation recherche (accents/apostrophes/ponctuation/espaces) */
+// Normalisation recherche (accents/apostrophes/ponctuation)
 function normalizeSearch(input = "") {
   return String(input)
     .trim()
@@ -91,7 +110,20 @@ function tokensMatch(haystackNormalized = "", tokens = []) {
   return tokens.every((t) => haystackNormalized.includes(t));
 }
 
-/** ✅ AJOUT: force un champ à être un tableau de strings (gère string “Véolia; Orange”) */
+// ✅ Normalisation REGIONS (tolérante : accents/tirets/apostrophes/espaces)
+function normalizeRegionKey(str) {
+  return String(str || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // accents
+    .replace(/[’']/g, " ") // apostrophes
+    .replace(/[^a-z0-9]+/g, " ") // tirets/ponctuation -> espace
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// ✅ Force une valeur à être un tableau de strings (gère string "A; B, C")
 function ensureStringArray(val) {
   if (Array.isArray(val)) {
     return val
@@ -107,11 +139,11 @@ function ensureStringArray(val) {
   return [];
 }
 
-/** ✅ AJOUT: récupère les comptes nommés même si ton JSON a une clé legacy différente */
+// ✅ Getter robuste pour namedAccounts (legacy keys incluses)
 function getNamedAccounts(contact) {
   return ensureStringArray(
     contact?.namedAccounts ??
-      contact?.namedAccountsText ??   // ✅ cas où c’est stocké en texte
+      contact?.namedAccountsText ??
       contact?.accounts ??
       contact?.account ??
       contact?.NamedAccounts ??
@@ -120,29 +152,44 @@ function getNamedAccounts(contact) {
   );
 }
 
+function normalizeList(str) {
+  return (str || "")
+    .split(/[;,]/)
+    .map((v) => String(v).replace(/\u00A0/g, " ").trim())
+    .filter(Boolean);
+}
 
-/** ✅ Alias régions CSV (PACA, IDF, etc.) */
-function regionAliases(regionName = "") {
-  const base = normalizeSearch(regionName);
-  const aliases = new Set([base]);
+// ✅ Alias région (optionnel) : PACA, IDF, etc.
+function regionAliasKeysFromName(regionName) {
+  const k = normalizeRegionKey(regionName);
+  const aliases = new Set([k]);
 
-  if (
-    base.includes("provence") &&
-    base.includes("alpes") &&
-    (base.includes("cote") || base.includes("azur"))
-  ) {
+  // Alias courts fréquents
+  if (k.includes("provence") && k.includes("alpes") && k.includes("azur")) {
     aliases.add("paca");
   }
-  if (base.includes("ile") && base.includes("france")) aliases.add("idf");
-  if (base.includes("hauts") && base.includes("france")) aliases.add("hdf");
-  if (base.includes("bourgogne") && base.includes("franche")) aliases.add("bfc");
-  if (base.includes("nouvelle") && base.includes("aquitaine")) aliases.add("na");
-  if (base.includes("auvergne") && base.includes("rhone")) aliases.add("aura");
+  if (k.includes("ile") && k.includes("france")) aliases.add("idf");
+  if (k.includes("hauts") && k.includes("france")) aliases.add("hdf");
+  if (k.includes("grand") && k.includes("est")) aliases.add("ge");
+  if (k.includes("normandie")) aliases.add("norm");
+  if (k.includes("bretagne")) aliases.add("bre");
+  if (k.includes("occitanie")) aliases.add("occ");
+  if (k.includes("corse")) aliases.add("cor");
+  if (k.includes("centre") && k.includes("loire")) aliases.add("cvl");
+  if (k.includes("nouvelle") && k.includes("aquitaine")) aliases.add("na");
+  if (k.includes("auvergne") && k.includes("rhone") && k.includes("alpes"))
+    aliases.add("aura");
+  if (k.includes("bourgogne") && k.includes("franche") && k.includes("comte"))
+    aliases.add("bfc");
+  if (k.includes("pays") && k.includes("loire")) aliases.add("pdl");
 
   return aliases;
 }
 
-// Données d'exemple
+/* =========================
+   Data seed + normalization
+========================= */
+
 const SAMPLE_DATA = {
   regions: france.locations.map((loc) => ({
     id: loc.id,
@@ -161,7 +208,7 @@ const SAMPLE_DATA = {
   })),
 };
 
-// Normalisation des données (aligné sur la carte SVG)
+// Normalisation des données (on s'aligne sur la carte SVG)
 function normalizeData(raw) {
   const existingRegions = Array.isArray(raw?.regions) ? raw.regions : [];
 
@@ -172,11 +219,7 @@ function normalizeData(raw) {
         (r) => (r.name || "").trim() === (loc.name || "").trim()
       );
 
-    const base = match || {
-      id: loc.id,
-      name: loc.name,
-      partners: [],
-    };
+    const base = match || { id: loc.id, name: loc.name, partners: [] };
 
     return {
       id: base.id || loc.id,
@@ -186,7 +229,6 @@ function normalizeData(raw) {
         contacts: (p.contacts || []).map((c) => ({
           ...c,
           verticals: ensureStringArray(c.verticals),
-          // ✅ CRUCIAL: on “répare” namedAccounts même s’il est stocké en string
           namedAccounts: getNamedAccounts(c),
           territory: c.territory || "",
         })),
@@ -195,9 +237,12 @@ function normalizeData(raw) {
     };
   });
 
-  console.log("[NORMALIZE] données normalisées :", normalizedRegions);
   return { regions: normalizedRegions };
 }
+
+/* =========================
+   UI Components
+========================= */
 
 function FranceSvg({ onSelect, hoveredId, setHoveredId, selectedId }) {
   const vb = france.viewBox || "0 0 1096 915";
@@ -271,6 +316,8 @@ function FranceSvg({ onSelect, hoveredId, setHoveredId, selectedId }) {
   );
 }
 
+/* ===== Contacts ===== */
+
 function AddContactInline({ onAdd }) {
   const [form, setForm] = useState({
     photo: "",
@@ -322,6 +369,7 @@ function AddContactInline({ onAdd }) {
         className="hidden"
         onChange={(e) => handleFiles(e.target.files)}
       />
+
       <div className="grid grid-cols-2 gap-2">
         <input
           className="border rounded px-2 py-1 text-gray-900"
@@ -336,6 +384,7 @@ function AddContactInline({ onAdd }) {
           onChange={(e) => setForm({ ...form, lastName: e.target.value })}
         />
       </div>
+
       <input
         className="border rounded px-2 py-1 w-full text-gray-900"
         placeholder="Poste"
@@ -357,7 +406,7 @@ function AddContactInline({ onAdd }) {
 
       <input
         className="border rounded px-2 py-1 w-full text-gray-900 text-xs"
-        placeholder="Verticals (séparés par des virgules) ex: Industrie, Public"
+        placeholder="Verticals (séparés par des virgules)"
         value={form.verticals}
         onChange={(e) => setForm({ ...form, verticals: e.target.value })}
       />
@@ -402,12 +451,6 @@ function AddContactInline({ onAdd }) {
 function AddContactDialog({ onAdd }) {
   const [open, setOpen] = useState(false);
 
-  const normalizeListLocal = (s) =>
-    (s || "")
-      .split(/[;,]/)
-      .map((v) => String(v).replace(/\u00A0/g, " ").trim())
-      .filter(Boolean);
-
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -428,8 +471,9 @@ function AddContactDialog({ onAdd }) {
               title: c.title,
               email: c.email,
               phone: c.phone,
-              verticals: normalizeListLocal(c.verticals),
-              namedAccounts: normalizeListLocal(c.namedAccounts),
+              verticals: normalizeList(c.verticals),
+              namedAccounts: normalizeList(c.namedAccounts),
+              namedAccountsText: c.namedAccounts, // compat
               territory: (c.territory || "").trim(),
             };
             onAdd(payload);
@@ -439,454 +483,6 @@ function AddContactDialog({ onAdd }) {
       </DialogContent>
     </Dialog>
   );
-}
-
-// === Création projet ===
-function AddProjectDialog({ onAdd }) {
-  const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({
-    name: "",
-    description: "",
-    status: "En cours",
-    icName: "",
-  });
-
-  const canSave = form.name.trim().length > 0;
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <button className="rounded-lg border border-purple-700 bg-white px-3 py-2 text-sm font-semibold hover:bg-purple-50 text-purple-700">
-          Ajouter un projet
-        </button>
-      </DialogTrigger>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>Nouveau projet</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 text-sm">
-          <input
-            className="border rounded px-2 py-1 w-full text-gray-900"
-            placeholder="Nom du projet *"
-            value={form.name}
-            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-          />
-          <textarea
-            className="border rounded px-2 py-1 w-full text-gray-900"
-            placeholder="Description (facultatif)"
-            rows={3}
-            value={form.description}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, description: e.target.value }))
-            }
-          />
-          <div className="grid grid-cols-2 gap-2">
-            <select
-              className="border rounded px-2 py-1 text-gray-900"
-              value={form.status}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, status: e.target.value }))
-              }
-            >
-              <option value="En cours">En cours</option>
-              <option value="Gagné">Gagné</option>
-              <option value="Perdu">Perdu</option>
-              <option value="Pause">Pause</option>
-            </select>
-            <input
-              className="border rounded px-2 py-1 text-gray-900"
-              placeholder="IC associé (texte libre)"
-              value={form.icName}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, icName: e.target.value }))
-              }
-            />
-          </div>
-          <div className="flex justify-end gap-2 mt-2">
-            <button
-              className="rounded-lg border px-3 py-1.5 text-sm"
-              onClick={() => setOpen(false)}
-            >
-              Annuler
-            </button>
-            <button
-              disabled={!canSave}
-              className="rounded-lg bg-purple-600 text-white px-3 py-1.5 text-sm disabled:opacity-50 hover:bg-purple-700"
-              onClick={() => {
-                onAdd(form);
-                setOpen(false);
-                setForm({
-                  name: "",
-                  description: "",
-                  status: "En cours",
-                  icName: "",
-                });
-              }}
-            >
-              Enregistrer
-            </button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function AddPartnerDialog({ onAdd }) {
-  const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({
-    name: "",
-    address: "",
-    city: "",
-    status: "silver",
-    logo: "",
-  });
-
-  const handleFiles = async (files) => {
-    const file = files?.[0];
-    if (!file) return;
-    try {
-      const dataUrl = await fileToDataUrl(file, 220);
-      setForm((f) => ({ ...f, logo: dataUrl }));
-    } catch {}
-  };
-
-  const canSave = form.name.trim().length > 0;
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <button
-          className="rounded-lg border border-purple-700 bg-white px-3 py-2 text-sm font-semibold hover:bg-purple-50 !text-purple-700"
-          style={{ color: "#6B21A8" }}
-        >
-          Ajouter un partenaire
-        </button>
-      </DialogTrigger>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>Nouveau partenaire</DialogTitle>
-        </DialogHeader>
-        <div className="grid gap-3">
-          <div
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              e.preventDefault();
-              handleFiles(e.dataTransfer?.files || null);
-            }}
-            className="border border-dashed rounded-lg p-3 text-sm text-center cursor-pointer"
-            onClick={() =>
-              document.getElementById("partner-logo-input")?.click()
-            }
-          >
-            {form.logo ? (
-              <div className="flex items-center gap-3 justify-center">
-                <img
-                  src={form.logo}
-                  alt="logo"
-                  className="h-12 w-12 rounded bg-white border object-contain"
-                />
-                <span>Remplacer le logo (glisser-déposer ou cliquer)</span>
-              </div>
-            ) : (
-              <span>Glisse un logo ici ou clique pour choisir…</span>
-            )}
-          </div>
-          <input
-            id="partner-logo-input"
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => handleFiles(e.target.files)}
-          />
-
-          <input
-            className="border rounded px-2 py-1 text-gray-900"
-            placeholder="Nom *"
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-          />
-          <input
-            className="border rounded px-2 py-1 text-gray-900"
-            placeholder="Adresse"
-            value={form.address}
-            onChange={(e) => setForm({ ...form, address: e.target.value })}
-          />
-          <input
-            className="border rounded px-2 py-1 text-gray-900"
-            placeholder="Ville"
-            value={form.city}
-            onChange={(e) => setForm({ ...form, city: e.target.value })}
-          />
-          <select
-            className="border rounded px-2 py-1 text-gray-900"
-            value={form.status}
-            onChange={(e) => setForm({ ...form, status: e.target.value })}
-          >
-            <option value="bronze">Bronze</option>
-            <option value="silver">Silver</option>
-            <option value="gold">Gold</option>
-          </select>
-          <div className="flex justify-end gap-2 mt-2">
-            <button
-              className="rounded-lg border px-3 py-1.5 text-sm"
-              onClick={() => setOpen(false)}
-            >
-              Annuler
-            </button>
-            <button
-              disabled={!canSave}
-              className="rounded-lg bg-purple-600 text-white px-3 py-1.5 text-sm disabled:opacity-50 hover:bg-purple-700"
-              onClick={() => {
-                onAdd({ ...form });
-                setOpen(false);
-                setForm({
-                  name: "",
-                  address: "",
-                  city: "",
-                  status: "silver",
-                  logo: "",
-                });
-              }}
-            >
-              Enregistrer
-            </button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// Import CSV global
-function ImportCsvDialog({ onImport }) {
-  const [open, setOpen] = useState(false);
-  const [error, setError] = useState("");
-
-  const handleFiles = (files) => {
-    const file = files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const text = String(reader.result || "");
-        const rows = parseCsv(text);
-        if (!rows.length) {
-          setError("Aucune ligne valide détectée dans le fichier.");
-          return;
-        }
-        onImport(rows);
-        setError("");
-        setOpen(false);
-      } catch (e) {
-        console.error(e);
-        setError("Erreur lors de la lecture du fichier.");
-      }
-    };
-    reader.onerror = () => setError("Impossible de lire le fichier.");
-    reader.readAsText(file, "utf-8");
-  };
-
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(val) => {
-        setOpen(val);
-        if (!val) setError("");
-      }}
-    >
-      <DialogTrigger asChild>
-        <button className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-semibold hover:bg-gray-50 text-gray-800">
-          Importer CSV
-        </button>
-      </DialogTrigger>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>Importer des partenaires / contacts</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 text-sm">
-          <p>Exemple minimal de colonnes :</p>
-          <pre className="bg-gray-100 rounded-md p-2 text-xs overflow-x-auto">
-region,partner,city,address,status,firstName,lastName,title,email,phone,account
-          </pre>
-          <p className="text-xs text-gray-500">
-            Tu peux aussi utiliser <code>accounts</code>,{" "}
-            <code>namedAccounts</code> avec plusieurs comptes séparés par
-            virgules ou point-virgule.
-          </p>
-          <div
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              e.preventDefault();
-              handleFiles(e.dataTransfer?.files || null);
-            }}
-            className="border border-dashed rounded-lg p-4 text-center cursor-pointer"
-            onClick={() => document.getElementById("csv-import-input")?.click()}
-          >
-            Glisse ton fichier ici ou clique pour parcourir…
-          </div>
-          <input
-            id="csv-import-input"
-            type="file"
-            accept=".csv,text/csv"
-            className="hidden"
-            onChange={(e) => handleFiles(e.target.files)}
-          />
-          {error && <p className="text-xs text-red-600">{error}</p>}
-          <p className="text-xs text-gray-500">
-            Les lignes sont associées aux régions via <code>region</code>. Matching
-            tolérant + alias (ex: <code>PACA</code>).
-          </p>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function EditPartnerDialog({ partner, onSave }) {
-  const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({
-    name: partner.name || "",
-    address: partner.address || "",
-    city: partner.city || "",
-    status: partner.status || "silver",
-    logo: partner.logo || "",
-  });
-
-  useEffect(() => {
-    setForm({
-      name: partner.name || "",
-      address: partner.address || "",
-      city: partner.city || "",
-      status: partner.status || "silver",
-      logo: partner.logo || "",
-    });
-  }, [partner]);
-
-  const handleFiles = async (files) => {
-    const file = files?.[0];
-    if (!file) return;
-    try {
-      const dataUrl = await fileToDataUrl(file, 220);
-      setForm((f) => ({ ...f, logo: dataUrl }));
-    } catch {}
-  };
-
-  const canSave = form.name.trim().length > 0;
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <button
-          onClick={(e) => e.stopPropagation()}
-          className="p-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100"
-          title="Modifier ce partenaire"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="h-4 w-4"
-            viewBox="0 0 20 20"
-            fill="currentColor"
-          >
-            <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793z" />
-            <path d="M4 13.5V16h2.5l7.086-7.086-2.828-2.828L4 13.5z" />
-          </svg>
-        </button>
-      </DialogTrigger>
-      <DialogContent className="max-w-md" onClick={(e) => e.stopPropagation()}>
-        <DialogHeader>
-          <DialogTitle>Modifier le partenaire</DialogTitle>
-        </DialogHeader>
-        <div className="grid gap-3">
-          <div
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              e.preventDefault();
-              handleFiles(e.dataTransfer?.files || null);
-            }}
-            className="border border-dashed rounded-lg p-3 text-sm text-center cursor-pointer"
-            onClick={() =>
-              document.getElementById("edit-partner-logo-input")?.click()
-            }
-          >
-            {form.logo ? (
-              <div className="flex items-center gap-3 justify-center">
-                <img
-                  src={form.logo}
-                  alt="logo"
-                  className="h-12 w-12 rounded bg-white border object-contain"
-                />
-                <span>Remplacer le logo (glisser-déposer ou cliquer)</span>
-              </div>
-            ) : (
-              <span>Glisse un logo ici ou clique pour choisir…</span>
-            )}
-          </div>
-          <input
-            id="edit-partner-logo-input"
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => handleFiles(e.target.files)}
-          />
-
-          <input
-            className="border rounded px-2 py-1 text-gray-900"
-            placeholder="Nom *"
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-          />
-          <input
-            className="border rounded px-2 py-1 text-gray-900"
-            placeholder="Adresse"
-            value={form.address}
-            onChange={(e) => setForm({ ...form, address: e.target.value })}
-          />
-          <input
-            className="border rounded px-2 py-1 text-gray-900"
-            placeholder="Ville"
-            value={form.city}
-            onChange={(e) => setForm({ ...form, city: e.target.value })}
-          />
-          <select
-            className="border rounded px-2 py-1 text-gray-900"
-            value={form.status}
-            onChange={(e) => setForm({ ...form, status: e.target.value })}
-          >
-            <option value="bronze">Bronze</option>
-            <option value="silver">Silver</option>
-            <option value="gold">Gold</option>
-          </select>
-
-          <div className="flex justify-end gap-2 mt-2">
-            <button
-              className="rounded-lg border px-3 py-1.5 text-sm"
-              onClick={() => setOpen(false)}
-            >
-              Annuler
-            </button>
-            <button
-              disabled={!canSave}
-              className="rounded-lg bg-purple-600 text-white px-3 py-1.5 text-sm disabled:opacity-50 hover:bg-purple-700"
-              onClick={() => {
-                onSave({ ...form });
-                setOpen(false);
-              }}
-            >
-              Enregistrer
-            </button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function normalizeList(str) {
-  return (str || "")
-    .split(/[;,]/)
-    .map((v) => String(v).replace(/\u00A0/g, " ").trim())
-    .filter(Boolean);
 }
 
 function EditContactDialog({ contact, onSave }) {
@@ -975,10 +571,10 @@ function EditContactDialog({ contact, onSave }) {
                   alt="aperçu"
                   className="h-12 w-12 rounded-full object-cover border"
                 />
-                <span>Remplacer la photo (glisser-déposer ou cliquer)</span>
+                <span>Remplacer la photo</span>
               </div>
             ) : (
-              <span>Glisse une photo ici ou clique pour choisir…</span>
+              <span>Glisse une photo ici ou clique…</span>
             )}
           </div>
           <input
@@ -994,7 +590,9 @@ function EditContactDialog({ contact, onSave }) {
               className="border rounded px-2 py-1 text-gray-900"
               placeholder="Prénom"
               value={form.firstName}
-              onChange={(e) => setForm({ ...form, firstName: e.target.value })}
+              onChange={(e) =>
+                setForm({ ...form, firstName: e.target.value })
+              }
             />
             <input
               className="border rounded px-2 py-1 text-gray-900"
@@ -1025,7 +623,7 @@ function EditContactDialog({ contact, onSave }) {
 
           <input
             className="border rounded px-2 py-1 w-full text-gray-900 text-xs"
-            placeholder="Verticals (séparés par des virgules)"
+            placeholder="Verticals"
             value={form.verticalsText}
             onChange={(e) =>
               setForm({ ...form, verticalsText: e.target.value })
@@ -1033,7 +631,7 @@ function EditContactDialog({ contact, onSave }) {
           />
           <input
             className="border rounded px-2 py-1 w-full text-gray-900 text-xs"
-            placeholder="Comptes nommés (séparés par des virgules)"
+            placeholder="Comptes nommés"
             value={form.namedAccountsText}
             onChange={(e) =>
               setForm({ ...form, namedAccountsText: e.target.value })
@@ -1041,7 +639,7 @@ function EditContactDialog({ contact, onSave }) {
           />
           <input
             className="border rounded px-2 py-1 w-full text-gray-900 text-xs"
-            placeholder="Zone (ex: Sud, IDF, National)"
+            placeholder="Zone"
             value={form.territory}
             onChange={(e) => setForm({ ...form, territory: e.target.value })}
           />
@@ -1058,18 +656,17 @@ function EditContactDialog({ contact, onSave }) {
               className="rounded-lg bg-purple-600 text-white px-3 py-1.5 text-sm disabled:opacity-50 hover:bg-purple-700"
               onClick={() => {
                 const payload = {
-  photo: form.photo,
-  firstName: form.firstName,
-  lastName: form.lastName,
-  title: form.title,
-  email: form.email,
-  phone: form.phone,
-  verticals: normalizeList(form.verticalsText),
-  namedAccounts: normalizeList(form.namedAccountsText),
-  namedAccountsText: form.namedAccountsText, // ✅ on garde le texte aussi
-  territory: (form.territory || "").trim(),
-};
-
+                  photo: form.photo,
+                  firstName: form.firstName,
+                  lastName: form.lastName,
+                  title: form.title,
+                  email: form.email,
+                  phone: form.phone,
+                  verticals: normalizeList(form.verticalsText),
+                  namedAccounts: normalizeList(form.namedAccountsText),
+                  namedAccountsText: form.namedAccountsText, // compat legacy
+                  territory: (form.territory || "").trim(),
+                };
                 onSave(payload);
                 setOpen(false);
               }}
@@ -1083,7 +680,98 @@ function EditContactDialog({ contact, onSave }) {
   );
 }
 
-// Édition projet
+/* ===== Projects ===== */
+
+function AddProjectDialog({ onAdd }) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({
+    name: "",
+    description: "",
+    status: "En cours",
+    icName: "",
+  });
+
+  const canSave = form.name.trim().length > 0;
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <button className="rounded-lg border border-purple-700 bg-white px-3 py-2 text-sm font-semibold hover:bg-purple-50 text-purple-700">
+          Ajouter un projet
+        </button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Nouveau projet</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 text-sm">
+          <input
+            className="border rounded px-2 py-1 w-full text-gray-900"
+            placeholder="Nom du projet *"
+            value={form.name}
+            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+          />
+          <textarea
+            className="border rounded px-2 py-1 w-full text-gray-900"
+            placeholder="Description"
+            rows={3}
+            value={form.description}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, description: e.target.value }))
+            }
+          />
+          <div className="grid grid-cols-2 gap-2">
+            <select
+              className="border rounded px-2 py-1 text-gray-900"
+              value={form.status}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, status: e.target.value }))
+              }
+            >
+              <option value="En cours">En cours</option>
+              <option value="Gagné">Gagné</option>
+              <option value="Perdu">Perdu</option>
+              <option value="Pause">Pause</option>
+            </select>
+            <input
+              className="border rounded px-2 py-1 text-gray-900"
+              placeholder="IC associé"
+              value={form.icName}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, icName: e.target.value }))
+              }
+            />
+          </div>
+          <div className="flex justify-end gap-2 mt-2">
+            <button
+              className="rounded-lg border px-3 py-1.5 text-sm"
+              onClick={() => setOpen(false)}
+            >
+              Annuler
+            </button>
+            <button
+              disabled={!canSave}
+              className="rounded-lg bg-purple-600 text-white px-3 py-1.5 text-sm disabled:opacity-50 hover:bg-purple-700"
+              onClick={() => {
+                onAdd(form);
+                setOpen(false);
+                setForm({
+                  name: "",
+                  description: "",
+                  status: "En cours",
+                  icName: "",
+                });
+              }}
+            >
+              Enregistrer
+            </button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function EditProjectDialog({ project, onSave }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({
@@ -1188,6 +876,364 @@ function EditProjectDialog({ project, onSave }) {
   );
 }
 
+/* ===== Partners ===== */
+
+function AddPartnerDialog({ onAdd }) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({
+    name: "",
+    address: "",
+    city: "",
+    status: "silver",
+    logo: "",
+  });
+
+  const handleFiles = async (files) => {
+    const file = files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await fileToDataUrl(file, 220);
+      setForm((f) => ({ ...f, logo: dataUrl }));
+    } catch {}
+  };
+
+  const canSave = form.name.trim().length > 0;
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <button
+          className="rounded-lg border border-purple-700 bg-white px-3 py-2 text-sm font-semibold hover:bg-purple-50 !text-purple-700"
+          style={{ color: "#6B21A8" }}
+        >
+          Ajouter un partenaire
+        </button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Nouveau partenaire</DialogTitle>
+        </DialogHeader>
+
+        <div className="grid gap-3">
+          <div
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              handleFiles(e.dataTransfer?.files || null);
+            }}
+            className="border border-dashed rounded-lg p-3 text-sm text-center cursor-pointer"
+            onClick={() =>
+              document.getElementById("partner-logo-input")?.click()
+            }
+          >
+            {form.logo ? (
+              <div className="flex items-center gap-3 justify-center">
+                <img
+                  src={form.logo}
+                  alt="logo"
+                  className="h-12 w-12 rounded bg-white border object-contain"
+                />
+                <span>Remplacer le logo</span>
+              </div>
+            ) : (
+              <span>Glisse un logo ici ou clique…</span>
+            )}
+          </div>
+          <input
+            id="partner-logo-input"
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => handleFiles(e.target.files)}
+          />
+
+          <input
+            className="border rounded px-2 py-1 text-gray-900"
+            placeholder="Nom *"
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+          />
+          <input
+            className="border rounded px-2 py-1 text-gray-900"
+            placeholder="Adresse"
+            value={form.address}
+            onChange={(e) => setForm({ ...form, address: e.target.value })}
+          />
+          <input
+            className="border rounded px-2 py-1 text-gray-900"
+            placeholder="Ville"
+            value={form.city}
+            onChange={(e) => setForm({ ...form, city: e.target.value })}
+          />
+          <select
+            className="border rounded px-2 py-1 text-gray-900"
+            value={form.status}
+            onChange={(e) => setForm({ ...form, status: e.target.value })}
+          >
+            <option value="bronze">Bronze</option>
+            <option value="silver">Silver</option>
+            <option value="gold">Gold</option>
+          </select>
+
+          <div className="flex justify-end gap-2 mt-2">
+            <button
+              className="rounded-lg border px-3 py-1.5 text-sm"
+              onClick={() => setOpen(false)}
+            >
+              Annuler
+            </button>
+            <button
+              disabled={!canSave}
+              className="rounded-lg bg-purple-600 text-white px-3 py-1.5 text-sm disabled:opacity-50 hover:bg-purple-700"
+              onClick={() => {
+                onAdd({ ...form });
+                setOpen(false);
+                setForm({
+                  name: "",
+                  address: "",
+                  city: "",
+                  status: "silver",
+                  logo: "",
+                });
+              }}
+            >
+              Enregistrer
+            </button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditPartnerDialog({ partner, onSave }) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({
+    name: partner.name || "",
+    address: partner.address || "",
+    city: partner.city || "",
+    status: partner.status || "silver",
+    logo: partner.logo || "",
+  });
+
+  useEffect(() => {
+    setForm({
+      name: partner.name || "",
+      address: partner.address || "",
+      city: partner.city || "",
+      status: partner.status || "silver",
+      logo: partner.logo || "",
+    });
+  }, [partner]);
+
+  const handleFiles = async (files) => {
+    const file = files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await fileToDataUrl(file, 220);
+      setForm((f) => ({ ...f, logo: dataUrl }));
+    } catch {}
+  };
+
+  const canSave = form.name.trim().length > 0;
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <button
+          onClick={(e) => e.stopPropagation()}
+          className="p-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100"
+          title="Modifier ce partenaire"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            className="h-4 w-4"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+          >
+            <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793z" />
+            <path d="M4 13.5V16h2.5l7.086-7.086-2.828-2.828L4 13.5z" />
+          </svg>
+        </button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md" onClick={(e) => e.stopPropagation()}>
+        <DialogHeader>
+          <DialogTitle>Modifier le partenaire</DialogTitle>
+        </DialogHeader>
+
+        <div className="grid gap-3">
+          <div
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              handleFiles(e.dataTransfer?.files || null);
+            }}
+            className="border border-dashed rounded-lg p-3 text-sm text-center cursor-pointer"
+            onClick={() =>
+              document.getElementById("edit-partner-logo-input")?.click()
+            }
+          >
+            {form.logo ? (
+              <div className="flex items-center gap-3 justify-center">
+                <img
+                  src={form.logo}
+                  alt="logo"
+                  className="h-12 w-12 rounded bg-white border object-contain"
+                />
+                <span>Remplacer le logo</span>
+              </div>
+            ) : (
+              <span>Glisse un logo ici ou clique…</span>
+            )}
+          </div>
+          <input
+            id="edit-partner-logo-input"
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => handleFiles(e.target.files)}
+          />
+
+          <input
+            className="border rounded px-2 py-1 text-gray-900"
+            placeholder="Nom *"
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+          />
+          <input
+            className="border rounded px-2 py-1 text-gray-900"
+            placeholder="Adresse"
+            value={form.address}
+            onChange={(e) => setForm({ ...form, address: e.target.value })}
+          />
+          <input
+            className="border rounded px-2 py-1 text-gray-900"
+            placeholder="Ville"
+            value={form.city}
+            onChange={(e) => setForm({ ...form, city: e.target.value })}
+          />
+          <select
+            className="border rounded px-2 py-1 text-gray-900"
+            value={form.status}
+            onChange={(e) => setForm({ ...form, status: e.target.value })}
+          >
+            <option value="bronze">Bronze</option>
+            <option value="silver">Silver</option>
+            <option value="gold">Gold</option>
+          </select>
+
+          <div className="flex justify-end gap-2 mt-2">
+            <button
+              className="rounded-lg border px-3 py-1.5 text-sm"
+              onClick={() => setOpen(false)}
+            >
+              Annuler
+            </button>
+            <button
+              disabled={!canSave}
+              className="rounded-lg bg-purple-600 text-white px-3 py-1.5 text-sm disabled:opacity-50 hover:bg-purple-700"
+              onClick={() => {
+                onSave({ ...form });
+                setOpen(false);
+              }}
+            >
+              Enregistrer
+            </button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ===== CSV Import Dialog ===== */
+
+function ImportCsvDialog({ onImport }) {
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleFiles = (files) => {
+    const file = files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const text = String(reader.result || "");
+        const rows = parseCsv(text);
+        if (!rows.length) {
+          setError("Aucune ligne valide détectée dans le fichier.");
+          return;
+        }
+        onImport(rows);
+        setError("");
+        setOpen(false);
+      } catch (e) {
+        console.error(e);
+        setError("Erreur lors de la lecture du fichier.");
+      }
+    };
+    reader.onerror = () => setError("Impossible de lire le fichier.");
+    reader.readAsText(file, "utf-8");
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(val) => {
+        setOpen(val);
+        if (!val) setError("");
+      }}
+    >
+      <DialogTrigger asChild>
+        <button className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-semibold hover:bg-gray-50 text-gray-800">
+          Importer CSV
+        </button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Importer des partenaires / contacts</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 text-sm">
+          <p>Colonnes minimales :</p>
+          <pre className="bg-gray-100 rounded-md p-2 text-xs overflow-x-auto">
+region,partner,city,address,status,firstName,lastName,title,email,phone,account
+          </pre>
+          <p className="text-xs text-gray-500">
+            Optionnel (recommandé) : <code>regionId</code> pour matcher la région
+            sans ambiguïté. Sinon, on matche le nom même si tu changes les
+            accents/tirets/apostrophes.
+          </p>
+
+          <div
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              handleFiles(e.dataTransfer?.files || null);
+            }}
+            className="border border-dashed rounded-lg p-4 text-center cursor-pointer"
+            onClick={() => document.getElementById("csv-import-input")?.click()}
+          >
+            Glisse ton fichier ici ou clique…
+          </div>
+          <input
+            id="csv-import-input"
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            onChange={(e) => handleFiles(e.target.files)}
+          />
+
+          {error && <p className="text-xs text-red-600">{error}</p>}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* =========================
+   Main
+========================= */
+
 export default function PartnerMapFrance() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1196,14 +1242,15 @@ export default function PartnerMapFrance() {
   const [selectedRegionId, setSelectedRegionId] = useState(null);
   const [hoveredId, setHoveredId] = useState(null);
   const [activePartnerIndex, setActivePartnerIndex] = useState(null);
+
   const [isAdmin, setIsAdmin] = useState(false);
+
   const [projectSearch, setProjectSearch] = useState("");
   const [accountSearch, setAccountSearch] = useState("");
 
   // Load Supabase
   useEffect(() => {
     async function load() {
-      console.log("[LOAD] Début du chargement…");
       try {
         const { data: row, error } = await supabase
           .from("partner_map")
@@ -1211,41 +1258,27 @@ export default function PartnerMapFrance() {
           .eq("id", "france")
           .single();
 
-        console.log("[LOAD] Résultat Supabase:", { row, error });
-
         if (error) {
-          console.error("[LOAD] Erreur Supabase:", error);
           setLoadError("Erreur de chargement Supabase");
 
-          // Fallback localStorage
+          // fallback localStorage
           try {
             const raw = window.localStorage.getItem(STORAGE_KEY);
             if (raw) {
-              console.log("[LOAD] Chargement depuis localStorage");
-              const parsed = JSON.parse(raw);
-              setData(normalizeData(parsed));
+              setData(normalizeData(JSON.parse(raw)));
               setLoading(false);
               return;
             }
-          } catch (e) {
-            console.error("[LOAD] Erreur localStorage:", e);
-          }
+          } catch {}
 
-          console.log("[LOAD] Fallback SAMPLE_DATA");
           setData(normalizeData(SAMPLE_DATA));
           setLoading(false);
           return;
         }
 
-        if (row?.data) {
-          console.log("[LOAD] Données Supabase trouvées, normalisation…");
-          setData(normalizeData(row.data));
-        } else {
-          console.log("[LOAD] Aucune ligne Supabase, utilisation SAMPLE_DATA");
-          setData(normalizeData(SAMPLE_DATA));
-        }
+        if (row?.data) setData(normalizeData(row.data));
+        else setData(normalizeData(SAMPLE_DATA));
       } catch (e) {
-        console.error("[LOAD] Exception Supabase:", e);
         setLoadError("Erreur de chargement");
         setData(normalizeData(SAMPLE_DATA));
       } finally {
@@ -1255,26 +1288,6 @@ export default function PartnerMapFrance() {
 
     load();
   }, []);
-  
-useEffect(() => {
-  if (!data) return;
-
-  const all = [];
-  data.regions.forEach((r) =>
-    r.partners.forEach((p) =>
-      (p.contacts || []).forEach((c) => {
-        getNamedAccounts(c).forEach((a) => all.push(a));
-      })
-    )
-  );
-
-  console.log("[DEBUG] named accounts count =", all.length);
-  console.log("[DEBUG] named accounts sample =", all.slice(0, 20));
-  console.log(
-    "[DEBUG] contains veol? =",
-    all.some((a) => normalizeSearch(a).includes("veol"))
-  );
-}, [data]);
 
   // Save Supabase + localStorage
   useEffect(() => {
@@ -1282,25 +1295,20 @@ useEffect(() => {
 
     async function save() {
       try {
-        const { error } = await supabase
+        await supabase
           .from("partner_map")
           .upsert({ id: "france", data }, { onConflict: "id" });
-
-        if (error) console.error("[SAVE] Erreur Supabase save:", error);
-      } catch (e) {
-        console.error("[SAVE] Exception Supabase save:", e);
-      }
+      } catch {}
 
       try {
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-      } catch (e) {
-        console.error("[SAVE] Erreur localStorage:", e);
-      }
+      } catch {}
     }
 
     save();
   }, [data]);
 
+  // selectedRegion robuste
   const selectedRegion = useMemo(() => {
     if (!data || !selectedRegionId) return null;
 
@@ -1322,13 +1330,11 @@ useEffect(() => {
       : null;
 
   const handleToggleAdmin = () => {
-    if (isAdmin) setIsAdmin(false);
-    else {
-      const pwd = window.prompt("Mot de passe admin ?");
-      if (pwd === null) return;
-      if (pwd === ADMIN_PASSWORD) setIsAdmin(true);
-      else window.alert("Mot de passe incorrect");
-    }
+    if (isAdmin) return setIsAdmin(false);
+    const pwd = window.prompt("Mot de passe admin ?");
+    if (pwd === null) return;
+    if (pwd === ADMIN_PASSWORD) setIsAdmin(true);
+    else window.alert("Mot de passe incorrect");
   };
 
   const handleDeletePartner = (partnerIndex) => {
@@ -1342,8 +1348,10 @@ useEffect(() => {
     setData((prev) => ({
       regions: prev.regions.map((r) => {
         if (r.id !== selectedRegion.id) return r;
-        const newPartners = r.partners.filter((_, i) => i !== partnerIndex);
-        return { ...r, partners: newPartners };
+        return {
+          ...r,
+          partners: r.partners.filter((_, i) => i !== partnerIndex),
+        };
       }),
     }));
 
@@ -1407,7 +1415,7 @@ useEffect(() => {
     }));
   };
 
-  // Recherche projets (tolérante accents)
+  // Recherche projets (tolérante)
   const filteredProjects = useMemo(() => {
     const tokens = tokenizeQuery(projectSearch);
     if (!tokens.length || !data) return [];
@@ -1418,7 +1426,13 @@ useEffect(() => {
       region.partners.forEach((partner, partnerIndex) => {
         (partner.projects || []).forEach((project) => {
           const haystack = normalizeSearch(
-            [project.name, partner.name, region.name, project.icName, project.description]
+            [
+              project.name,
+              project.icName,
+              project.description,
+              partner.name,
+              region.name,
+            ]
               .filter(Boolean)
               .join(" ")
           );
@@ -1433,7 +1447,7 @@ useEffect(() => {
     return results;
   }, [data, projectSearch]);
 
-  // ✅ Recherche comptes nommés (robuste legacy + accents)
+  // Recherche comptes nommés (tolérante + robust legacy)
   const filteredAccounts = useMemo(() => {
     const tokens = tokenizeQuery(accountSearch);
     if (!tokens.length || !data) return [];
@@ -1443,12 +1457,20 @@ useEffect(() => {
     data.regions.forEach((region) => {
       region.partners.forEach((partner, partnerIndex) => {
         (partner.contacts || []).forEach((contact) => {
-          // IMPORTANT: on utilise le getter robuste
           const accounts = getNamedAccounts(contact);
 
           accounts.forEach((accName) => {
             const haystack = normalizeSearch(
-              [accName, contact.firstName, contact.lastName, contact.email, contact.title, contact.territory, partner.name, region.name]
+              [
+                accName,
+                contact.firstName,
+                contact.lastName,
+                contact.email,
+                contact.title,
+                contact.territory,
+                partner.name,
+                region.name,
+              ]
                 .filter(Boolean)
                 .join(" ")
             );
@@ -1470,18 +1492,35 @@ useEffect(() => {
     return results;
   }, [data, accountSearch]);
 
-  // Import CSV (région tolérante + comptes nommés)
-  const handleImportCsv = (rows) => {
-    if (!data) return;
+  // ✅ Import CSV avec matching région robuste
+  const rowsForRegion = rows.filter((row) => {
+  const rn = row.region || row.Region || "";
+  return normalizeRegionKey(rn) === normalizeRegionKey(r.name || "");
+});
+
+
+    // Prépare un mapping clé normalisée -> région
+    const regionKeyToId = new Map();
+    data.regions.forEach((r) => {
+      const aliases = regionAliasKeysFromName(r.name || "");
+      aliases.forEach((k) => regionKeyToId.set(k, r.id));
+    });
 
     setData((prev) => {
       const nextRegions = prev.regions.map((r) => {
-        const aliases = regionAliases(r.name || "");
-
         const rowsForRegion = rows.filter((row) => {
-          const rn = row.region || row.Region || "";
-          const rnNorm = normalizeSearch(rn);
-          return aliases.has(rnNorm);
+          const rid =
+            row.regionId ||
+            row.RegionId ||
+            row.REGION_ID ||
+            row.region_id ||
+            "";
+          if (rid && String(rid).trim() === r.id) return true;
+
+          const rn = row.region || row.Region || row.REGION || "";
+          const key = normalizeRegionKey(rn);
+          const mappedId = regionKeyToId.get(key);
+          return mappedId === r.id;
         });
 
         if (!rowsForRegion.length) return r;
@@ -1489,7 +1528,8 @@ useEffect(() => {
         let partners = [...r.partners];
 
         rowsForRegion.forEach((row) => {
-          const partnerName = row.partner || row.PARTNER || row.Partner || "";
+          const partnerName =
+            row.partner || row.PARTNER || row.Partner || "";
           if (!partnerName) return;
 
           let idx = partners.findIndex(
@@ -1513,8 +1553,16 @@ useEffect(() => {
 
           const baseContact = {
             photo: "",
-            firstName: row.firstName || row.firstname || row.FirstName || "",
-            lastName: row.lastName || row.lastname || row.LastName || "",
+            firstName:
+              row.firstName ||
+              row.firstname ||
+              row.FirstName ||
+              "",
+            lastName:
+              row.lastName ||
+              row.lastname ||
+              row.LastName ||
+              "",
             title: row.title || row.Title || "",
             email: row.email || row.Email || "",
             phone: row.phone || row.Phone || "",
@@ -1528,7 +1576,6 @@ useEffect(() => {
             row.namedAccounts ||
             row.NamedAccounts ||
             "";
-
           const accountsList = ensureStringArray(accountsRaw);
 
           if (
@@ -1544,10 +1591,16 @@ useEffect(() => {
           const matchIndex = contacts.findIndex((c) => {
             if (baseContact.email && c.email) {
               return (
-                c.email.trim().toLowerCase() === baseContact.email.trim().toLowerCase()
+                c.email.trim().toLowerCase() ===
+                baseContact.email.trim().toLowerCase()
               );
             }
-            if (baseContact.firstName && baseContact.lastName && c.firstName && c.lastName) {
+            if (
+              baseContact.firstName &&
+              baseContact.lastName &&
+              c.firstName &&
+              c.lastName
+            ) {
               return (
                 normalizeSearch(c.firstName) === normalizeSearch(baseContact.firstName) &&
                 normalizeSearch(c.lastName) === normalizeSearch(baseContact.lastName)
@@ -1563,6 +1616,7 @@ useEffect(() => {
                 ...baseContact,
                 verticals: [],
                 namedAccounts: accountsList,
+                namedAccountsText: accountsList.join(", "),
                 territory: "",
               },
             ];
@@ -1570,9 +1624,11 @@ useEffect(() => {
             const existing = contacts[matchIndex];
             const updated = { ...existing };
 
-            ["firstName", "lastName", "title", "email", "phone"].forEach((field) => {
-              if (baseContact[field]) updated[field] = baseContact[field];
-            });
+            ["firstName", "lastName", "title", "email", "phone"].forEach(
+              (field) => {
+                if (baseContact[field]) updated[field] = baseContact[field];
+              }
+            );
 
             const mergedAccounts = [
               ...getNamedAccounts(existing),
@@ -1582,14 +1638,21 @@ useEffect(() => {
               .filter(Boolean);
 
             // dédoublonnage accent-proof
-            const uniqueKeys = [...new Set(mergedAccounts.map((a) => normalizeSearch(a)))];
+            const uniqueKeys = [
+              ...new Set(mergedAccounts.map((a) => normalizeSearch(a))),
+            ];
             const uniqueAccounts = uniqueKeys
-              .map((k) => mergedAccounts.find((a) => normalizeSearch(a) === k))
+              .map((k) =>
+                mergedAccounts.find((a) => normalizeSearch(a) === k)
+              )
               .filter(Boolean);
 
             updated.namedAccounts = uniqueAccounts;
+            updated.namedAccountsText = uniqueAccounts.join(", ");
 
-            contacts = contacts.map((c, ci) => (ci === matchIndex ? updated : c));
+            contacts = contacts.map((c, ci) =>
+              ci === matchIndex ? updated : c
+            );
           }
 
           partners[idx] = { ...partners[idx], contacts };
@@ -1615,6 +1678,7 @@ useEffect(() => {
   return (
     <div className="relative min-h-screen bg-gradient-to-b from-[#f5f0fa] to-[#e8f9f6] p-6">
       <div className="mx-auto max-w-6xl space-y-4">
+        {/* Header */}
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <h1 className="text-2xl font-semibold tracking-tight text-[#5a189a]">
             Carte des partenaires
@@ -1663,6 +1727,7 @@ useEffect(() => {
           </div>
         )}
 
+        {/* Résultats recherche projets */}
         {projectSearch.trim() && (
           <div className="rounded-xl border bg-white shadow-sm p-3 text-xs">
             <div className="flex items-center justify-between mb-1">
@@ -1670,39 +1735,51 @@ useEffect(() => {
                 Projets correspondant à “{projectSearch}”
               </span>
               <span className="text-gray-500">
-                {filteredProjects.length} projet{filteredProjects.length > 1 ? "s" : ""}
+                {filteredProjects.length} projet
+                {filteredProjects.length > 1 ? "s" : ""}
               </span>
             </div>
             {filteredProjects.length === 0 ? (
-              <p className="text-gray-500">Aucun projet trouvé correspondant à cette recherche.</p>
+              <p className="text-gray-500">
+                Aucun projet trouvé correspondant à cette recherche.
+              </p>
             ) : (
               <ul className="space-y-1 max-h-40 overflow-auto pr-1">
-                {filteredProjects.map(({ project, partner, region, partnerIndex }, idx) => (
-                  <li
-                    key={`${region.id}-${partnerIndex}-${project.name}-${idx}`}
-                    className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 hover:bg-gray-50 cursor-pointer"
-                    onClick={() => {
-                      setSelectedRegionId(region.id);
-                      setActivePartnerIndex(partnerIndex);
-                    }}
-                  >
-                    <div>
-                      <div className="font-semibold text-gray-800">{project.name}</div>
-                      <div className="text-gray-600">
-                        {partner.name} · {region.name}
+                {filteredProjects.map(
+                  ({ project, partner, region, partnerIndex }, idx) => (
+                    <li
+                      key={`${region.id}-${partnerIndex}-${project.name}-${idx}`}
+                      className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 hover:bg-gray-50 cursor-pointer"
+                      onClick={() => {
+                        setSelectedRegionId(region.id);
+                        setActivePartnerIndex(partnerIndex);
+                      }}
+                    >
+                      <div>
+                        <div className="font-semibold text-gray-800">
+                          {project.name}
+                        </div>
+                        <div className="text-gray-600">
+                          {partner.name} · {region.name}
+                        </div>
+                        {project.icName && (
+                          <div className="text-gray-500">
+                            IC : {project.icName}
+                          </div>
+                        )}
                       </div>
-                      {project.icName && <div className="text-gray-500">IC : {project.icName}</div>}
-                    </div>
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-50 text-purple-700 border border-purple-100">
-                      {project.status || "En cours"}
-                    </span>
-                  </li>
-                ))}
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-50 text-purple-700 border border-purple-100">
+                        {project.status || "En cours"}
+                      </span>
+                    </li>
+                  )
+                )}
               </ul>
             )}
           </div>
         )}
 
+        {/* Résultats recherche comptes nommés */}
         {accountSearch.trim() && (
           <div className="rounded-xl border bg-white shadow-sm p-3 text-xs">
             <div className="flex items-center justify-between mb-1">
@@ -1710,40 +1787,53 @@ useEffect(() => {
                 Comptes nommés correspondant à “{accountSearch}”
               </span>
               <span className="text-gray-500">
-                {filteredAccounts.length} résultat{filteredAccounts.length > 1 ? "s" : ""}
+                {filteredAccounts.length} résultat
+                {filteredAccounts.length > 1 ? "s" : ""}
               </span>
             </div>
             {filteredAccounts.length === 0 ? (
-              <p className="text-gray-500">Aucun compte nommé trouvé correspondant à cette recherche.</p>
+              <p className="text-gray-500">
+                Aucun compte nommé trouvé correspondant à cette recherche.
+              </p>
             ) : (
               <ul className="space-y-1 max-h-40 overflow-auto pr-1">
-                {filteredAccounts.map(({ accountName, contact, partner, region, partnerIndex }, idx) => (
-                  <li
-                    key={`${region.id}-${partnerIndex}-${accountName}-${idx}`}
-                    className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 hover:bg-gray-50 cursor-pointer"
-                    onClick={() => {
-                      setSelectedRegionId(region.id);
-                      setActivePartnerIndex(partnerIndex);
-                    }}
-                  >
-                    <div>
-                      <div className="font-semibold text-gray-800">{accountName}</div>
-                      <div className="text-gray-600">
-                        {partner.name} · {region.name}
+                {filteredAccounts.map(
+                  (
+                    { accountName, contact, partner, region, partnerIndex },
+                    idx
+                  ) => (
+                    <li
+                      key={`${region.id}-${partnerIndex}-${accountName}-${idx}`}
+                      className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 hover:bg-gray-50 cursor-pointer"
+                      onClick={() => {
+                        setSelectedRegionId(region.id);
+                        setActivePartnerIndex(partnerIndex);
+                      }}
+                    >
+                      <div>
+                        <div className="font-semibold text-gray-800">
+                          {accountName}
+                        </div>
+                        <div className="text-gray-600">
+                          {partner.name} · {region.name}
+                        </div>
+                        <div className="text-gray-600">
+                          Contact : {contact.firstName} {contact.lastName}
+                          {contact.territory
+                            ? ` · Zone : ${contact.territory}`
+                            : ""}
+                        </div>
                       </div>
-                      <div className="text-gray-600">
-                        Contact : {contact.firstName} {contact.lastName}
-                        {contact.territory ? ` · Zone : ${contact.territory}` : ""}
-                      </div>
-                    </div>
-                  </li>
-                ))}
+                    </li>
+                  )
+                )}
               </ul>
             )}
           </div>
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Carte */}
           <div className="rounded-2xl border bg-white shadow-md p-4 relative">
             <FranceSvg
               onSelect={(id) => {
@@ -1756,6 +1846,7 @@ useEffect(() => {
             />
           </div>
 
+          {/* Panneau droite */}
           <div className="rounded-2xl border bg-white shadow-md p-4">
             {selectedRegion ? (
               <div>
@@ -1763,6 +1854,7 @@ useEffect(() => {
                   <h2 className="text-lg font-semibold text-[#5a189a]">
                     {selectedRegion.name}
                   </h2>
+
                   {isAdmin && (
                     <AddPartnerDialog
                       onAdd={(partner) => {
@@ -1784,13 +1876,16 @@ useEffect(() => {
                   )}
                 </div>
 
+                {/* Liste partenaires */}
                 <ul className="space-y-2">
                   {selectedRegion.partners.map((p, index) => (
                     <li key={index}>
                       <div
                         onClick={() => setActivePartnerIndex(index)}
                         className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 shadow-sm hover:shadow-md transition cursor-pointer ${
-                          activePartnerIndex === index ? "bg-gray-100" : "bg-white"
+                          activePartnerIndex === index
+                            ? "bg-gray-100"
+                            : "bg-white"
                         }`}
                       >
                         <div className="flex items-center flex-wrap gap-2">
@@ -1801,9 +1896,19 @@ useEffect(() => {
                               className="h-6 w-6 rounded bg-white border object-contain"
                             />
                           )}
-                          <span className="font-semibold text-gray-900">{p.name}</span>
-                          {p.city && <span className="text-sm text-gray-700">• {p.city}</span>}
-                          {p.address && <span className="text-sm text-gray-700">• {p.address}</span>}
+                          <span className="font-semibold text-gray-900">
+                            {p.name}
+                          </span>
+                          {p.city && (
+                            <span className="text-sm text-gray-700">
+                              • {p.city}
+                            </span>
+                          )}
+                          {p.address && (
+                            <span className="text-sm text-gray-700">
+                              • {p.address}
+                            </span>
+                          )}
                           <span
                             className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${
                               p.status === "gold"
@@ -1819,14 +1924,31 @@ useEffect(() => {
 
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-gray-500">
-                            {Array.isArray(p.contacts) ? p.contacts.length : 0} contacts
+                            {Array.isArray(p.contacts) ? p.contacts.length : 0}{" "}
+                            contacts
                           </span>
                           <span className="text-xs text-gray-500">
-                            {Array.isArray(p.projects) ? p.projects.length : 0} projets
+                            {Array.isArray(p.projects) ? p.projects.length : 0}{" "}
+                            projets
                           </span>
 
                           {isAdmin && (
                             <div className="flex items-center gap-1">
+                              <EditPartnerDialog
+                                partner={p}
+                                onSave={(updated) => {
+                                  setData((prev) => ({
+                                    regions: prev.regions.map((r) => {
+                                      if (r.id !== selectedRegion.id) return r;
+                                      const partners = r.partners.map((pp, i) =>
+                                        i === index ? { ...pp, ...updated } : pp
+                                      );
+                                      return { ...r, partners };
+                                    }),
+                                  }));
+                                }}
+                              />
+
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -1845,8 +1967,10 @@ useEffect(() => {
                   ))}
                 </ul>
 
+                {/* Détails partenaire actif */}
                 {activePartner && (
                   <div className="mt-4 rounded-xl border p-4 bg-white space-y-4">
+                    {/* Contacts */}
                     <div>
                       <h3 className="text-sm font-semibold mb-2">
                         Contacts — {activePartner.name}
@@ -1880,7 +2004,10 @@ useEffect(() => {
 
                                   <div className="text-gray-700">
                                     {c.email && (
-                                      <a href={`mailto:${c.email}`} className="underline">
+                                      <a
+                                        href={`mailto:${c.email}`}
+                                        className="underline"
+                                      >
                                         {c.email}
                                       </a>
                                     )}
@@ -1890,7 +2017,8 @@ useEffect(() => {
 
                                   {ensureStringArray(c.verticals).length > 0 && (
                                     <div className="text-[11px] text-gray-600">
-                                      Verticals : {ensureStringArray(c.verticals).join(", ")}
+                                      Verticals :{" "}
+                                      {ensureStringArray(c.verticals).join(", ")}
                                     </div>
                                   )}
 
@@ -1923,7 +2051,6 @@ useEffect(() => {
                                                 ? {
                                                     ...cc,
                                                     ...updated,
-                                                    // ✅ on force au passage
                                                     verticals: ensureStringArray(updated.verticals),
                                                     namedAccounts: ensureStringArray(updated.namedAccounts),
                                                   }
@@ -1956,10 +2083,12 @@ useEffect(() => {
                       )}
                     </div>
 
+                    {/* Projets */}
                     <div>
                       <h3 className="text-sm font-semibold mb-2">
                         Projets — {activePartner.name}
                       </h3>
+
                       {activePartner.projects?.length ? (
                         <div className="space-y-2 mb-2">
                           {activePartner.projects.map((proj, i) => (
@@ -1972,7 +2101,9 @@ useEffect(() => {
                                   {proj.name}
                                 </div>
                                 {proj.icName && (
-                                  <div className="text-gray-700">IC : {proj.icName}</div>
+                                  <div className="text-gray-700">
+                                    IC : {proj.icName}
+                                  </div>
                                 )}
                                 {proj.description && (
                                   <div className="text-xs text-gray-600 mt-0.5">
@@ -1981,35 +2112,42 @@ useEffect(() => {
                                 )}
                               </div>
 
-                              {isAdmin && (
-                                <div className="flex items-center gap-1">
-                                  <EditProjectDialog
-                                    project={proj}
-                                    onSave={(updated) => {
-                                      setData((prev) => ({
-                                        regions: prev.regions.map((r) => {
-                                          if (r.id !== selectedRegion.id) return r;
-                                          const partners = r.partners.map((p2, pi) => {
-                                            if (pi !== activePartnerIndex) return p2;
-                                            const newProjects = p2.projects.map((ppj, pji) =>
-                                              pji === i ? { ...ppj, ...updated } : ppj
-                                            );
-                                            return { ...p2, projects: newProjects };
-                                          });
-                                          return { ...r, partners };
-                                        }),
-                                      }));
-                                    }}
-                                  />
-                                  <button
-                                    onClick={() => handleDeleteProject(i)}
-                                    className="p-1.5 rounded-lg border border-red-300 text-red-600 hover:bg-red-50"
-                                    title="Supprimer ce projet"
-                                  >
-                                    🗑️
-                                  </button>
-                                </div>
-                              )}
+                              <div className="flex flex-col items-end gap-1">
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-50 text-purple-700 border border-purple-100">
+                                  {proj.status || "En cours"}
+                                </span>
+
+                                {isAdmin && (
+                                  <div className="flex items-center gap-1">
+                                    <EditProjectDialog
+                                      project={proj}
+                                      onSave={(updated) => {
+                                        setData((prev) => ({
+                                          regions: prev.regions.map((r) => {
+                                            if (r.id !== selectedRegion.id) return r;
+                                            const partners = r.partners.map((p2, pi) => {
+                                              if (pi !== activePartnerIndex) return p2;
+                                              const newProjects = p2.projects.map((ppj, pji) =>
+                                                pji === i ? { ...ppj, ...updated } : ppj
+                                              );
+                                              return { ...p2, projects: newProjects };
+                                            });
+                                            return { ...r, partners };
+                                          }),
+                                        }));
+                                      }}
+                                    />
+
+                                    <button
+                                      onClick={() => handleDeleteProject(i)}
+                                      className="p-1.5 rounded-lg border border-red-300 text-red-600 hover:bg-red-50"
+                                      title="Supprimer ce projet"
+                                    >
+                                      🗑️
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -2020,6 +2158,7 @@ useEffect(() => {
                       )}
                     </div>
 
+                    {/* Création contact / projet */}
                     {isAdmin && (
                       <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-dashed mt-1">
                         <AddProjectDialog
@@ -2029,7 +2168,10 @@ useEffect(() => {
                                 if (r.id !== selectedRegion.id) return r;
                                 const partners = r.partners.map((pp, pi) =>
                                   pi === activePartnerIndex
-                                    ? { ...pp, projects: [...(pp.projects || []), project] }
+                                    ? {
+                                        ...pp,
+                                        projects: [...(pp.projects || []), project],
+                                      }
                                     : pp
                                 );
                                 return { ...r, partners };
@@ -2050,7 +2192,6 @@ useEffect(() => {
                                           ...(pp.contacts || []),
                                           {
                                             ...contact,
-                                            // ✅ on force au passage
                                             verticals: ensureStringArray(contact.verticals),
                                             namedAccounts: ensureStringArray(contact.namedAccounts),
                                           },
@@ -2078,4 +2219,4 @@ useEffect(() => {
       </div>
     </div>
   );
-}
+
